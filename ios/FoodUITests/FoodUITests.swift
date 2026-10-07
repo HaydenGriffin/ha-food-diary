@@ -385,7 +385,8 @@ final class FoodUITests: XCTestCase {
         composer().typeText("skyr")
         tap(button(startingWith: "Add Skyr with granola again"), "again")
         let save = app.buttons["Save these together"]
-        for _ in 0..<4 where !save.exists { app.swipeUp() }
+        // The button appears once the second food has landed, which can take a few seconds on a slow runner.
+        for _ in 0..<4 where !save.waitForExistence(timeout: 4) { app.swipeUp() }
         XCTAssertTrue(save.waitForExistence(timeout: 5), "two foods: save them as one")
         save.tap()
         tap(app.alerts.buttons["Save"], "save in the alert")
