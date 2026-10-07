@@ -1,0 +1,132 @@
+name: Food
+options:
+  deploymentTarget:
+    iOS: "18.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_PREVIEWS: YES
+targets:
+  Food:
+    type: application
+    platform: iOS
+    sources: [Food, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).food
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: Food
+    entitlements:
+      path: Food/Food.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+        com.apple.developer.healthkit.background-delivery: true
+        com.apple.security.application-groups: [group.$(BUNDLE_ID_PREFIX).food]
+        keychain-access-groups: [$(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).food.shared]
+    info:
+      path: Food/Info.plist
+      properties:
+        CFBundleDisplayName: Food
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIUserInterfaceStyle: Light   # the Olive Garden palette is light-only
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        CFBundleURLTypes:
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
+            CFBundleURLSchemes: [fooddiary]
+        NSCameraUsageDescription: Take a photo of a meal or a nutrition label, or scan a barcode.
+        NSPhotoLibraryUsageDescription: Pick a photo of a meal or a nutrition label.
+        NSHealthShareUsageDescription: Read your activity and sleep to show them beside your food, and optionally send them to Home Assistant.
+        NSHealthUpdateUsageDescription: Save what you eat to Apple Health.
+        BGTaskSchedulerPermittedIdentifiers: [$(PRODUCT_BUNDLE_IDENTIFIER).sync]
+        UIBackgroundModes: [fetch, processing]
+        AppIdentifierPrefix: $(AppIdentifierPrefix)
+        FDBundlePrefix: $(BUNDLE_ID_PREFIX)
+        FDClientID: $(HA_CLIENT_ID)
+        FDDefaultServer: $(HA_DEFAULT_SERVER)
+        ITSAppUsesNonExemptEncryption: false
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    dependencies:
+      - target: FoodWidgets
+      - target: FoodShare
+  FoodWidgets:
+    type: app-extension
+    platform: iOS
+    sources: [FoodWidgets, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).food.widgets
+    entitlements:
+      path: FoodWidgets/FoodWidgets.entitlements
+      properties:
+        com.apple.security.application-groups: [group.$(BUNDLE_ID_PREFIX).food]
+        keychain-access-groups: [$(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).food.shared]
+    info:
+      path: FoodWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Food
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        AppIdentifierPrefix: $(AppIdentifierPrefix)
+        FDBundlePrefix: $(BUNDLE_ID_PREFIX)
+        FDClientID: $(HA_CLIENT_ID)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  FoodShare:
+    type: app-extension
+    platform: iOS
+    sources: [FoodShare, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).food.share
+    entitlements:
+      path: FoodShare/FoodShare.entitlements
+      properties:
+        com.apple.security.application-groups: [group.$(BUNDLE_ID_PREFIX).food]
+        keychain-access-groups: [$(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).food.shared]
+    info:
+      path: FoodShare/Info.plist
+      properties:
+        UIUserInterfaceStyle: Light
+        CFBundleDisplayName: Food
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        AppIdentifierPrefix: $(AppIdentifierPrefix)
+        FDBundlePrefix: $(BUNDLE_ID_PREFIX)
+        FDClientID: $(HA_CLIENT_ID)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsImageWithMaxCount: 1
+  FoodUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [FoodUITests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).food.uitests
+    dependencies:
+      - target: Food
+schemes:
+  Food:
+    build:
+      targets:
+        Food: all
+        FoodUITests: [test]
+    test:
+      targets: [FoodUITests]

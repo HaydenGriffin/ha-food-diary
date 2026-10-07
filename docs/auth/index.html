@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Food for Home Assistant · sign-in</title>
+  <!-- Home Assistant reads this to allow the iOS app's sign-in redirect (OAuth client_id = this page's URL). -->
+  <link rel="redirect_uri" href="fooddiary://auth">
+  <style>
+    :root { --parchment: #f6f1e4; --panel: #fffdf6; --olive: #55603f; --olivewood: #68604d; --ink: #2d2f22; --muted: #7a7563; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px 20px;
+      background: var(--parchment); color: var(--ink);
+      font: 17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 30rem; background: var(--panel); border-radius: 24px; padding: 36px 32px 30px;
+      box-shadow: 0 1px 2px rgb(45 47 34 / 6%), 0 12px 32px rgb(45 47 34 / 8%);
+    }
+    svg { display: block; margin-bottom: 18px; }
+    h1 { font: 600 2rem/1.15 "New York", ui-serif, Georgia, serif; margin: 0 0 12px; }
+    p { margin: 0 0 14px; }
+    .muted { color: var(--muted); font-size: 15px; }
+    code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--parchment); padding: 2px 6px; border-radius: 6px; }
+    a { color: var(--olive); }
+  </style>
+</head>
+<body>
+  <main>
+    <svg width="44" height="64" viewBox="0 0 44 64" aria-hidden="true">
+      <path d="M22 62 C22 44 22 26 24 4" stroke="#68604d" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+      <ellipse cx="13" cy="44" rx="9" ry="4.5" transform="rotate(-35 13 44)" fill="#55603f"/>
+      <ellipse cx="32" cy="32" rx="9" ry="4.5" transform="rotate(35 32 32)" fill="#7d8a5a"/>
+      <ellipse cx="14" cy="20" rx="8" ry="4" transform="rotate(-35 14 20)" fill="#55603f"/>
+      <circle cx="30" cy="12" r="5" fill="#3f4630"/>
+    </svg>
+    <h1>Food</h1>
+    <p>This page identifies the <strong>Food</strong> iPhone app when it signs in to your Home Assistant. Home Assistant
+      checks it before sending you back to the app.</p>
+    <p class="muted">Nothing happens here and nothing is stored. Your diary stays in your own Home Assistant, in the
+      <code>food_diary</code> integration.</p>
+    <p class="muted"><a href="https://github.com/haydengriffin/ha-food-diary">Source on GitHub</a></p>
+  </main>
+</body>
+</html>

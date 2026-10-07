@@ -1,0 +1,637 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Food Diary",
+        "description": "A calorie and macro diary for one person. Log food from a meal photo, a nutrition label, a barcode, words or a recipe.",
+        "data": {
+          "person": "Person",
+          "ai_task_entity": "AI Task entity",
+          "notify_service": "Notify service",
+          "open_path": "Page to open from notifications",
+          "meal_plan_sensor": "Meal plan sensor",
+          "dishes_sensor": "Dish library sensor"
+        },
+        "data_description": {
+          "person": "Whose diary this is. Each person can have one diary.",
+          "ai_task_entity": "Reads meal photos, labels and descriptions. Leave empty to use your default AI Task entity.",
+          "notify_service": "Gets a notification such as “Logged: Porridge · 215 kcal · 1,030 left today”, with Undo, when food is logged by voice or through the webhook.",
+          "open_path": "A dashboard path such as /lovelace/food. The notification's Change button opens it.",
+          "meal_plan_sensor": "Optional. A sensor whose `week` attribute lists planned meals; they count in the diary ahead of time. See the docs for the attribute format.",
+          "dishes_sensor": "Optional. A sensor whose `dishes` attribute lists recipes; it gives planned meals their numbers and turns on the recipe numbers check. See the docs for the attribute format."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This person already has a food diary."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Food Diary options",
+        "description": "Webhook address for phone shortcuts (keep it private; anyone with it can log food to this diary): {webhook_url}",
+        "data": {
+          "ai_task_entity": "AI Task entity",
+          "notify_service": "Notify service",
+          "open_path": "Page to open from notifications",
+          "meal_plan_sensor": "Meal plan sensor",
+          "dishes_sensor": "Dish library sensor"
+        },
+        "data_description": {
+          "ai_task_entity": "Reads meal photos, labels and descriptions. Leave empty to use your default AI Task entity.",
+          "notify_service": "Gets a notification such as “Logged: Porridge · 215 kcal · 1,030 left today”, with Undo, when food is logged by voice or through the webhook.",
+          "open_path": "A dashboard path such as /lovelace/food. The notification's Change button opens it.",
+          "meal_plan_sensor": "Optional. A sensor whose `week` attribute lists planned meals; they count in the diary ahead of time. See the docs for the attribute format.",
+          "dishes_sensor": "Optional. A sensor whose `dishes` attribute lists recipes; it gives planned meals their numbers and turns on the recipe numbers check. See the docs for the attribute format."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "calories_today": {
+        "name": "Calories today"
+      },
+      "protein_today": {
+        "name": "Protein today"
+      },
+      "carbs_today": {
+        "name": "Carbs today"
+      },
+      "fat_today": {
+        "name": "Fat today"
+      },
+      "fibre_today": {
+        "name": "Fibre today"
+      },
+      "calories_left": {
+        "name": "Calories left"
+      },
+      "last_logged": {
+        "name": "Last logged"
+      }
+    },
+    "number": {
+      "calorie_goal": {
+        "name": "Calorie goal"
+      },
+      "protein_goal": {
+        "name": "Protein goal"
+      },
+      "carbs_goal": {
+        "name": "Carbs goal"
+      },
+      "fat_goal": {
+        "name": "Fat goal"
+      },
+      "fibre_goal": {
+        "name": "Fibre goal"
+      }
+    }
+  },
+  "services": {
+    "log_food": {
+      "name": "Log food",
+      "description": "Add something to a food diary. Give kcal (and macros) for one portion, or per_100 with grams.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "name": {
+          "name": "Name",
+          "description": "What it is."
+        },
+        "kcal": {
+          "name": "Calories",
+          "description": "kcal for one portion."
+        },
+        "protein_g": {
+          "name": "Protein",
+          "description": "Grams for one portion."
+        },
+        "carbs_g": {
+          "name": "Carbs",
+          "description": "Grams for one portion."
+        },
+        "fat_g": {
+          "name": "Fat",
+          "description": "Grams for one portion."
+        },
+        "fibre_g": {
+          "name": "Fibre",
+          "description": "Grams for one portion."
+        },
+        "portions": {
+          "name": "Portions",
+          "description": "How many portions."
+        },
+        "meal": {
+          "name": "Meal",
+          "description": "breakfast, lunch, dinner or snack. Leave out to go by the time of day."
+        },
+        "date": {
+          "name": "Date",
+          "description": "Leave out for today."
+        },
+        "source": {
+          "name": "Source",
+          "description": "Where the numbers came from: photo, label, barcode, text, dish, manual, again, saved or voice."
+        },
+        "ref": {
+          "name": "Reference",
+          "description": "A recipe id, for food from a recipe."
+        },
+        "note": {
+          "name": "Note",
+          "description": "A short note, like “1 bowl, about 350 g”."
+        },
+        "barcode": {
+          "name": "Barcode",
+          "description": "The product's barcode."
+        },
+        "per_100": {
+          "name": "Per 100 g",
+          "description": "kcal, protein_g, carbs_g, fat_g, fibre_g per 100 g or ml (from a label)."
+        },
+        "grams": {
+          "name": "Grams",
+          "description": "How much was eaten, with per_100."
+        },
+        "unit": {
+          "name": "Unit",
+          "description": "g or ml."
+        },
+        "edited": {
+          "name": "Own numbers",
+          "description": "Mark the numbers as typed in by hand."
+        },
+        "photo": {
+          "name": "Photo",
+          "description": "The photo file an estimate returned (kept with the entry)."
+        },
+        "image_url": {
+          "name": "Product photo",
+          "description": "An https picture of the product (from Open Food Facts, say)."
+        }
+      }
+    },
+    "update_food": {
+      "name": "Change food",
+      "description": "Change an entry: portions, grams (label and barcode entries), meal, name, your own numbers for the whole entry, or mark it as checked.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "entry_id": {
+          "name": "Entry",
+          "description": "The entry's id."
+        },
+        "date": {
+          "name": "Date",
+          "description": "The entry's day. Leave out for today."
+        },
+        "portions": {
+          "name": "Portions",
+          "description": "New number of portions."
+        },
+        "grams": {
+          "name": "Grams",
+          "description": "New amount, for entries with per-100 values."
+        },
+        "meal": {
+          "name": "Meal",
+          "description": "Move it to another meal."
+        },
+        "name": {
+          "name": "Name",
+          "description": "Rename it."
+        },
+        "kcal": {
+          "name": "Calories",
+          "description": "Your own kcal for the whole entry."
+        },
+        "protein_g": {
+          "name": "Protein",
+          "description": "Your own grams for the whole entry."
+        },
+        "carbs_g": {
+          "name": "Carbs",
+          "description": "Your own grams for the whole entry."
+        },
+        "fat_g": {
+          "name": "Fat",
+          "description": "Your own grams for the whole entry."
+        },
+        "fibre_g": {
+          "name": "Fibre",
+          "description": "Your own grams for the whole entry."
+        },
+        "checked": {
+          "name": "Checked",
+          "description": "Mark the entry as confirmed right (for example, a likely double entry that isn't one). False clears it."
+        }
+      }
+    },
+    "delete_food": {
+      "name": "Remove food",
+      "description": "Take an entry out of a food diary.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "entry_id": {
+          "name": "Entry",
+          "description": "The entry's id."
+        },
+        "date": {
+          "name": "Date",
+          "description": "The entry's day. Leave out for today."
+        }
+      }
+    },
+    "get_day": {
+      "name": "Get a day",
+      "description": "A day's entries, totals, goals, what's left and each meal's calories.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "date": {
+          "name": "Date",
+          "description": "Leave out for today."
+        }
+      }
+    },
+    "get_history": {
+      "name": "Get history",
+      "description": "Daily totals for the days up to a date.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "date": {
+          "name": "Last day",
+          "description": "Leave out for today."
+        },
+        "days": {
+          "name": "Days",
+          "description": "How many days (1–366)."
+        }
+      }
+    },
+    "get_recent": {
+      "name": "Get recent foods",
+      "description": "Foods logged in the last 60 days (most often first, ready to log again), the usual foods per meal (logged on 3 or more of the last 28 days) and saved meals.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "limit": {
+          "name": "How many",
+          "description": "How many foods to return (30 unless asked; up to 200, for searching)."
+        }
+      }
+    },
+    "set_goals": {
+      "name": "Set goals",
+      "description": "Daily goals for calories and macros.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "kcal": {
+          "name": "Calories",
+          "description": "kcal a day."
+        },
+        "protein_g": {
+          "name": "Protein",
+          "description": "Grams a day."
+        },
+        "carbs_g": {
+          "name": "Carbs",
+          "description": "Grams a day."
+        },
+        "fat_g": {
+          "name": "Fat",
+          "description": "Grams a day."
+        },
+        "fibre_g": {
+          "name": "Fibre",
+          "description": "Grams a day."
+        }
+      }
+    },
+    "estimate": {
+      "name": "Estimate",
+      "description": "Work out what something is and its nutrition, without logging it: a meal photo, a label photo and amount, a barcode and amount, words, or a recipe.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary (for its AI setting). Leave out for your own."
+        },
+        "kind": {
+          "name": "Kind",
+          "description": "photo, label, barcode, text or dish."
+        },
+        "image": {
+          "name": "Photo",
+          "description": "Base64 JPEG or PNG (photo and label)."
+        },
+        "amount": {
+          "name": "Amount",
+          "description": "What was eaten: “3 biscuits”, “50 g”, “half the pack” (label and barcode)."
+        },
+        "hint": {
+          "name": "Hint",
+          "description": "Anything to help with a meal photo."
+        },
+        "text": {
+          "name": "Text",
+          "description": "What was eaten, in words (text)."
+        },
+        "barcode": {
+          "name": "Barcode",
+          "description": "EAN or UPC digits (barcode; optional with label)."
+        },
+        "dish_id": {
+          "name": "Recipe id",
+          "description": "The recipe's id (dish). Its answer is kept."
+        },
+        "dish_name": {
+          "name": "Recipe name",
+          "description": "The recipe's name (dish)."
+        },
+        "ingredients": {
+          "name": "Ingredients",
+          "description": "The recipe's ingredients with amounts, one per item (dish)."
+        },
+        "servings": {
+          "name": "Servings",
+          "description": "How many portions the recipe makes (dish)."
+        },
+        "amounts_per": {
+          "name": "Amounts are per",
+          "description": "recipe or portion (dish)."
+        },
+        "fresh": {
+          "name": "Work it out again",
+          "description": "Ignore the kept answer for this recipe."
+        }
+      }
+    },
+    "get_dish_nutrition": {
+      "name": "Get recipe nutrition",
+      "description": "The kept nutrition for one portion of a recipe.",
+      "fields": {
+        "dish_id": {
+          "name": "Recipe id",
+          "description": "The recipe's id."
+        }
+      }
+    },
+    "set_dish_nutrition": {
+      "name": "Set recipe nutrition",
+      "description": "Nutrition for one portion of a recipe: your own numbers, or what the recipe prints. Its diary entries from today on that you haven't changed follow, and any doubt about its numbers goes.",
+      "fields": {
+        "dish_id": {
+          "name": "Recipe id",
+          "description": "The recipe's id."
+        },
+        "kcal": {
+          "name": "Calories",
+          "description": "kcal for one portion."
+        },
+        "protein_g": {
+          "name": "Protein",
+          "description": "Grams for one portion."
+        },
+        "carbs_g": {
+          "name": "Carbs",
+          "description": "Grams for one portion."
+        },
+        "fat_g": {
+          "name": "Fat",
+          "description": "Grams for one portion."
+        },
+        "fibre_g": {
+          "name": "Fibre",
+          "description": "Grams for one portion."
+        },
+        "source": {
+          "name": "Source",
+          "description": "own (your numbers, never doubted), recipe (printed on the recipe) or ai."
+        },
+        "portions": {
+          "name": "Portions",
+          "description": "How many portions the recipe makes."
+        }
+      }
+    },
+    "save_meal": {
+      "name": "Save a meal",
+      "description": "Keeps everything logged in one meal on one day as one thing to log again (the same name replaces an older one).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "name": {
+          "name": "Name",
+          "description": "What to call it, like My usual breakfast."
+        },
+        "date": {
+          "name": "Date",
+          "description": "The day it's on. Leave out for today."
+        },
+        "meal": {
+          "name": "Meal",
+          "description": "Which meal of that day."
+        }
+      }
+    },
+    "update_saved_meal": {
+      "name": "Change a saved meal",
+      "description": "Renames a saved meal or moves it to another meal (a name another saved meal has replaces that one).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "saved_id": {
+          "name": "Saved meal",
+          "description": "Its id, from get_recent."
+        },
+        "name": {
+          "name": "Name",
+          "description": "Its new name."
+        },
+        "meal": {
+          "name": "Meal",
+          "description": "Which meal it's for."
+        }
+      }
+    },
+    "delete_saved_meal": {
+      "name": "Delete a saved meal",
+      "description": "Removes a saved meal (what's already logged stays).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "saved_id": {
+          "name": "Saved meal",
+          "description": "Its id, from get_recent."
+        }
+      }
+    },
+    "get_week_review": {
+      "name": "Get a week's look back",
+      "description": "A week ending on a date: days on target (75–105% of the calorie goal), average, protein days, the most eaten food, recipes tried for the first time, the day closest to the goal.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "date": {
+          "name": "Last day",
+          "description": "The week's last day. Leave out for yesterday."
+        },
+        "days": {
+          "name": "Days",
+          "description": "How many days back (7 for a week)."
+        }
+      }
+    },
+    "get_dishes": {
+      "name": "Get the recipes",
+      "description": "The dish library's recipes, with each one's calories and macros per portion where the recipe book knows them. Empty when no dish library sensor is set.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        }
+      }
+    },
+    "sync_plan": {
+      "name": "Sync the meal plan now",
+      "description": "Brings this diary in line with the meal plan now (it also happens by itself a few seconds after the plan changes). Does nothing when no meal plan sensor is set.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        }
+      }
+    },
+    "set_photo": {
+      "name": "Set a food's photo",
+      "description": "Adds your own photo to something already logged.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "entry_id": {
+          "name": "Entry",
+          "description": "Its id."
+        },
+        "date": {
+          "name": "Date",
+          "description": "The day it's on. Leave out for today."
+        },
+        "image": {
+          "name": "Photo",
+          "description": "JPEG or PNG, base64."
+        }
+      }
+    },
+    "copy_day": {
+      "name": "Copy a day",
+      "description": "Copies a day, or one meal of it, onto other days (planned food comes as plain food). With replace, what those days had there goes first. Returns a token for undo_copy.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "from": {
+          "name": "From",
+          "description": "The day to copy."
+        },
+        "to": {
+          "name": "To",
+          "description": "The days to copy it to."
+        },
+        "meal": {
+          "name": "Meal",
+          "description": "Only this meal. Leave out for the whole day."
+        },
+        "replace": {
+          "name": "Replace",
+          "description": "Take off what's already there first."
+        }
+      }
+    },
+    "undo_copy": {
+      "name": "Undo a copy",
+      "description": "Puts the days back as they were before a copy_day (the last ten, until a restart).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "token": {
+          "name": "Token",
+          "description": "From copy_day."
+        }
+      }
+    },
+    "check_numbers": {
+      "name": "Check numbers",
+      "description": "Compares the numbers for a recipe (or a diary entry) with what its ingredients add up to, per portion.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "dish_id": {
+          "name": "Recipe id",
+          "description": "The recipe to check."
+        },
+        "entry_id": {
+          "name": "Entry",
+          "description": "Or a diary entry to check (with its date)."
+        },
+        "date": {
+          "name": "Date",
+          "description": "The entry's day. Leave out for today."
+        },
+        "portions": {
+          "name": "Portions",
+          "description": "How many portions the recipe makes."
+        }
+      }
+    },
+    "dismiss_check": {
+      "name": "Numbers are right",
+      "description": "Confirms a recipe's numbers are right: its doubt goes and isn't raised again for these numbers.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "dish_id": {
+          "name": "Recipe id",
+          "description": "The recipe."
+        }
+      }
+    }
+  }
+}

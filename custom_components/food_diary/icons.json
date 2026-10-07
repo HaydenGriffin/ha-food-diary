@@ -1,0 +1,67 @@
+{
+  "services": {
+    "log_food": {
+      "service": "mdi:food-apple-outline"
+    },
+    "update_food": {
+      "service": "mdi:pencil-outline"
+    },
+    "delete_food": {
+      "service": "mdi:delete-outline"
+    },
+    "get_day": {
+      "service": "mdi:calendar-today"
+    },
+    "get_history": {
+      "service": "mdi:chart-bar"
+    },
+    "get_recent": {
+      "service": "mdi:history"
+    },
+    "set_goals": {
+      "service": "mdi:target"
+    },
+    "estimate": {
+      "service": "mdi:auto-fix"
+    },
+    "get_dish_nutrition": {
+      "service": "mdi:book-open-variant"
+    },
+    "set_dish_nutrition": {
+      "service": "mdi:book-edit-outline"
+    },
+    "save_meal": {
+      "service": "mdi:content-save-outline"
+    },
+    "delete_saved_meal": {
+      "service": "mdi:delete-sweep-outline"
+    },
+    "get_week_review": {
+      "service": "mdi:calendar-week"
+    },
+    "get_dishes": {
+      "service": "mdi:book-open-page-variant-outline"
+    },
+    "sync_plan": {
+      "service": "mdi:calendar-sync"
+    },
+    "set_photo": {
+      "service": "mdi:camera-plus-outline"
+    },
+    "copy_day": {
+      "service": "mdi:content-copy"
+    },
+    "undo_copy": {
+      "service": "mdi:undo"
+    },
+    "update_saved_meal": {
+      "service": "mdi:pencil-box-outline"
+    },
+    "check_numbers": {
+      "service": "mdi:scale-balance"
+    },
+    "dismiss_check": {
+      "service": "mdi:check-decagram-outline"
+    }
+  }
+}

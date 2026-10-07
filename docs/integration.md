@@ -1,0 +1,610 @@
+# Food Diary integration reference
+
+`food_diary` is a Home Assistant custom integration that keeps a calorie and macro diary for each person. It can work out
+food from a meal photo, a nutrition label, a barcode (via Open Food Facts), a short description or a recipe. It provides
+sensors, goal numbers, services, a webhook for phone shortcuts and voice intents. Optionally, it can read a meal plan so
+planned meals count ahead of time.
+
+This page covers setup, the entities, every service with its fields and response, the webhook, voice, and the two optional
+sensor contracts.
+
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Entities](#entities)
+- [Choosing a diary](#choosing-a-diary)
+- [Services](#services)
+- [Webhook](#webhook)
+- [Event](#event)
+- [Voice (optional)](#voice-optional)
+- [Meal plan sensor contract](#meal-plan-sensor-contract)
+- [Dish library sensor contract](#dish-library-sensor-contract)
+- [Recipe numbers check](#recipe-numbers-check)
+- [Storage and privacy](#storage-and-privacy)
+
+## Installation
+
+**HACS:** add this repository as a custom repository (category *Integration*), install **Food Diary**, then restart
+Home Assistant.
+
+**Manual:** copy `custom_components/food_diary` into your configuration folder's `custom_components/`, then restart.
+
+Then go to **Settings → Devices & services → Add integration → Food Diary**. Add the integration once per person.
+
+Requirements:
+
+- Home Assistant 2026.2 or newer. The tests run against 2026.2.3.
+- An [AI Task](https://www.home-assistant.io/integrations/ai_task/) entity for photos, labels, text and recipe estimates.
+  It must accept image attachments. Manual logging and barcode lookups work without one.
+
+## Configuration
+
+**Person** (setup only) is the `person` entity whose diary this is. Each person can have one diary.
+
+Every other field is optional. You can set them during setup and change them later under **Configure**:
+
+| Option | Key | What it does |
+| --- | --- | --- |
+| AI Task entity | `ai_task_entity` | The entity that reads photos, labels and descriptions. If empty, the default AI Task entity is used. |
+| Notify service | `notify_service` | Gets a notification with **Undo** after food is logged by voice or webhook (e.g. `notify.mobile_app_<device>`). |
+| Page to open from notifications | `open_path` | A dashboard path, such as `/lovelace/food`. Adds a **Change** button that opens `<path>#food-<entry id>`. |
+| Meal plan sensor | `meal_plan_sensor` | Turns on the [meal planner](#meal-plan-sensor-contract). |
+| Dish library sensor | `dishes_sensor` | Gives planned meals their recipes' numbers, fills `get_dishes`, and turns on the [recipe numbers check](#recipe-numbers-check). |
+
+The **Configure** dialog also shows the diary's webhook address. Keep it private.
+
+If the home's country is set (**Settings → System → General**), the AI prompts mention it, so portion sizes follow local
+habits.
+
+When neither sensor is set, the planner and the background check don't run. In that state `sync_plan` returns
+`{"changed": 0, "completed": []}` and `get_dishes` returns `{"dishes": []}`. `check_numbers` still works for diary entries,
+by comparing them with a normal portion of the same name.
+
+## Entities
+
+Each diary adds one device, `<Person> food diary`, with these entities:
+
+| Entity | Unit | Notes |
+| --- | --- | --- |
+| `sensor.<person>_food_diary_calories_today` | kcal | Attributes: `goal`, `left`, `logged` (entry count), and `breakfast`, `lunch`, `dinner`, `snack` (kcal per meal). |
+| `sensor.<person>_food_diary_protein_today`, `…_carbs_today`, `…_fat_today`, `…_fibre_today` | g | Attributes: `goal`, `left`. |
+| `sensor.<person>_food_diary_calories_left` | kcal | Calories left against the goal (negative when over). Attribute: `goal`. |
+| `sensor.<person>_food_diary_last_logged` | timestamp | Attributes: `name`, `kcal`, `meal`. |
+| `number.<person>_food_diary_calorie_goal`, `…_protein_goal`, `…_carbs_goal`, `…_fat_goal`, `…_fibre_goal` | kcal / g | Daily goals. Default 2000 kcal, 100 g protein, 230 g carbs, 70 g fat and 30 g fibre. |
+
+The five "today" sensors use `state_class: total` and reset at local midnight. That keeps long-term statistics, history
+graphs and averages working.
+
+## Choosing a diary
+
+Every service that takes `person` (a `person.*` entity id) picks the diary in this order:
+
+1. the diary named by `person`;
+2. otherwise, the diary of the person linked to the calling Home Assistant user;
+3. otherwise, the only diary, if just one is set up.
+
+If more than one diary is set up and none of these applies, the call fails with a validation error.
+
+## Services
+
+The service names and response shapes below are the public contract used by the companion iOS app. Unless stated
+otherwise:
+
+- dates are `YYYY-MM-DD`, and a missing `date` means today;
+- `meal` is one of `breakfast`, `lunch`, `dinner` or `snack`;
+- the five numbers are `kcal`, `protein_g`, `carbs_g`, `fat_g` and `fibre_g`.
+
+"Response: optional" means the service can be called with or without `return_response`. "Response: only" means it must be
+called with a response.
+
+### Entry shape
+
+The responses below refer to an **entry**. It has this shape:
+
+```json
+{
+  "id": "a1b2c3d4e5", "at": "2026-10-07T08:15+01:00", "meal": "breakfast", "name": "Porridge",
+  "portions": 1.5, "source": "manual", "ref": "",
+  "per_portion": {"kcal": 320, "protein_g": 12, "carbs_g": 54, "fat_g": 6, "fibre_g": 5},
+  "kcal": 480, "protein_g": 18, "carbs_g": 81, "fat_g": 9, "fibre_g": 7.5
+}
+```
+
+Some keys appear only when they apply:
+
+| Key | Meaning |
+| --- | --- |
+| `per_100`, `grams`, `unit` | The entry came from a label or barcode, so its numbers are `per_100 × grams`. |
+| `note`, `barcode`, `photo`, `image_url` | Extra details about the food. |
+| `plan_key` | The planned slot it came from (`"<date>|<meal>"`). |
+| `edited: true` | The numbers were typed by hand, so the planner and recipe updates leave them alone. |
+| `checked: true` | The entry was confirmed as right. |
+
+Entries returned by `get_day`, `get_recent` and `set_photo` also carry `image`. That is the first that exists of:
+
+1. the entry's own photo (`/api/food_diary/photo/<name>`, which needs a signed-in user);
+2. its product photo;
+3. its recipe's photo from the dish library.
+
+`get_day` entries also carry `check` when their recipe's numbers [look wrong](#recipe-numbers-check).
+
+Each entry's `source` is one of `photo`, `label`, `barcode`, `text`, `dish`, `manual`, `again`, `saved` or `voice`.
+`plan` is set only by the planner.
+
+### Logging and changing
+
+#### `food_diary.log_food` (response: optional)
+
+Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` with `grams`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `person` | entity id | See [Choosing a diary](#choosing-a-diary). |
+| `name` | string | **Required.** |
+| `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | For one portion. |
+| `portions` | number | 0.05 to 50. Default 1. |
+| `meal` | meal | Defaults to the meal for the time of day (see below). |
+| `date` | date | |
+| `source` | string | One of the sources above. Default `manual`. |
+| `ref` | string | A recipe id (`dish_id`) or a saved meal id. |
+| `note`, `barcode` | string | |
+| `per_100` | object | The five numbers per 100 g or 100 ml. |
+| `grams` | number | The amount eaten, used with `per_100`. |
+| `unit` | `g` or `ml` | |
+| `edited` | boolean | Marks the numbers as typed by hand. |
+| `photo` | string | The `photo` value an `estimate` returned. The picture is kept with the entry. |
+| `image_url` | string | An `https://` product picture. |
+
+The time-of-day meal is breakfast before 10:30, lunch before 14:30, snack before 17:30, dinner before 21:30, and snack
+after that.
+
+**Response:** `{"entry": <entry>, "date": "<date>", "totals": {<five numbers>}}`. Also fires
+[`food_diary_logged`](#event).
+
+#### `food_diary.update_food` (response: optional)
+
+Changes an existing entry.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `person` | entity id | |
+| `entry_id` | string | **Required.** |
+| `date` | date | The day the entry is on. |
+| `portions` | number | |
+| `grams` | number | Only for entries that have `per_100`. Recalculates the numbers and clears `edited`. |
+| `meal` | meal | |
+| `name` | string | |
+| `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | Your own numbers for the **whole** entry. Sets `edited`. |
+| `checked` | boolean | `true` marks the entry as confirmed right. `false` clears it. |
+
+**Response:** `{"entry": <entry>}`.
+
+#### `food_diary.delete_food` (response: optional)
+
+Removes an entry. Fields: `person`, `entry_id` (**required**), `date`. If you remove a planned entry, the planner
+remembers it and won't add it back.
+
+**Response:** `{"ok": true}`.
+
+#### `food_diary.set_photo` (response: optional)
+
+Adds a photo to an existing entry. Fields: `person`, `entry_id` (**required**), `date`, and `image` (**required**, a
+base64 JPEG, PNG or WebP of up to 4 MB).
+
+**Response:** `{"entry": <entry with image>}`.
+
+#### `food_diary.set_goals` (response: optional)
+
+Sets daily goals. Fields: `person` and any of the five numbers. Goals can also be changed through the number entities.
+
+**Response:** `{"goals": {<five numbers>}}`.
+
+### Reading
+
+#### `food_diary.get_day` (response: only)
+
+Fields: `person`, `date`.
+
+**Response:**
+
+```json
+{"date": "…", "entries": [<entry>, …], "totals": {…}, "goals": {…}, "left": {…},
+ "meals": {"breakfast": 0, "lunch": 0, "dinner": 0, "snack": 0}}
+```
+
+Entries are sorted by meal, then by time. `left` only includes numbers that have a goal.
+
+#### `food_diary.get_history` (response: only)
+
+Fields: `person`, `date` (the last day), `days` (1 to 366, default 7).
+
+**Response:**
+
+```json
+{"days": [{"date": "…", "kcal": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fibre_g": 0, "logged": 0}, …],
+ "goals": {…}}
+```
+
+Days run from oldest to newest.
+
+#### `food_diary.get_recent` (response: only)
+
+Fields: `person`, `limit` (1 to 200, default 30).
+
+**Response:**
+
+```json
+{"foods": [<food>, …], "usuals": {"breakfast": [<food>, …], "lunch": […], "dinner": […], "snack": […]},
+ "saved": [<saved meal>, …]}
+```
+
+- **`foods`:** what was logged in the last 60 days, most often first.
+- **`usuals`:** up to two foods per meal that were logged on at least 3 of the last 28 days. Planned entries don't count.
+- **`saved`:** the diary's saved meals.
+
+A `<food>` is what you need to log it again:
+
+- `name`, `meal`, `source`, `ref`, and the five numbers for one portion;
+- `per_100`, `grams` and `unit` when the food has them;
+- `photo`, `image_url`, `barcode` and `image` when they exist;
+- `times`.
+
+#### `food_diary.get_week_review` (response: only)
+
+Fields: `person`, `date` (the last day, default yesterday), `days` (1 to 31, default 7).
+
+**Response:**
+
+```json
+{"start": "…", "end": "…", "days": [<history day>, …], "goal_kcal": 2000, "goal_protein_g": 100,
+ "days_logged": 5, "avg_kcal": 1840, "on_target": 3, "over": 1, "protein_days": 2, "last_week_avg_kcal": 1910,
+ "favourite": {"name": "Porridge", "times": 4}, "new_dishes": ["Lasagne"], "best_day": {"date": "…", "kcal": 1990}}
+```
+
+- **`on_target`:** days at 75 to 105% of the calorie goal.
+- **`protein_days`:** days at 90% or more of the protein goal.
+- **`favourite`**, **`best_day`** and **`last_week_avg_kcal`** can be `null`.
+- **`new_dishes`:** recipes (entries with a `ref`) not eaten in the previous 8 weeks, up to 5.
+
+### Saved meals and copying
+
+#### `food_diary.save_meal` (response: optional)
+
+Keeps everything logged in one meal on one day as one thing to log again. Saving with an existing name replaces that
+saved meal.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `person` | entity id | |
+| `name` | string | **Required.** |
+| `date` | date | |
+| `meal` | meal | **Required.** |
+
+**Response:**
+
+```json
+{"saved": {"id": "…", "name": "…", "meal": "…", "items": ["Porridge", "Banana"], <five numbers>, "at": "…"}}
+```
+
+#### `food_diary.update_saved_meal` (response: optional)
+
+Renames a saved meal or moves it to another meal. Fields: `person`, `saved_id` (**required**), `name`, `meal`. Taking
+another saved meal's name replaces that one.
+
+**Response:** `{"saved": <saved meal>}`.
+
+#### `food_diary.delete_saved_meal` (response: optional)
+
+Removes a saved meal. Fields: `person`, `saved_id` (**required**).
+
+**Response:** `{"ok": true}`.
+
+#### `food_diary.copy_day` (response: optional)
+
+Copies a day, or one meal of it, onto other days. Planned food arrives as ordinary food (`source: again`).
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `person` | entity id | |
+| `from` | date | **Required.** |
+| `to` | list of dates | **Required.** |
+| `meal` | meal | Copy just this meal. |
+| `replace` | boolean | Remove what the target days already have in that meal (or the whole day) first. |
+
+**Response:** `{"token": "…", "added": {"<date>": <count>}, "removed": {"<date>": <count>}}`.
+
+#### `food_diary.undo_copy` (response: optional)
+
+Undoes one of the last ten copies. Undo history is lost on restart. Fields: `person`, `token` (**required**).
+
+**Response:** `{"ok": true}`.
+
+### Estimating
+
+#### `food_diary.estimate` (response: only)
+
+Works out what something is and its numbers. It doesn't log anything.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `person` | entity id | Chooses whose AI setting is used. |
+| `kind` | `photo`, `label`, `barcode`, `text` or `dish` | **Required.** |
+| `image` | string | Base64. Required for `photo` and `label`. |
+| `hint` | string | `photo` only. |
+| `amount` | string | For `label` and `barcode`, e.g. "3 biscuits", "50 g" or "half the pack". |
+| `barcode` | string | EAN or UPC digits. Required for `barcode`, optional for `label`. |
+| `text` | string | For `text`, e.g. "2 eggs on toast". |
+| `dish_id` | string | Required for `dish`. |
+| `dish_name` | string | `dish` only. |
+| `ingredients` | list of strings | `dish` only. |
+| `servings` | number | `dish` only. |
+| `amounts_per` | `recipe` or `portion` | `dish` only. |
+| `fresh` | boolean | `dish` only. Ignores the kept answer and asks again. |
+
+The AI only reads values: what is on a label, and how much was eaten. The integration does all the arithmetic. Common
+amounts like "50 g", "3 biscuits" or "half the pack" are worked out without the AI.
+
+**Response by kind:**
+
+| Kind | Response |
+| --- | --- |
+| `photo` | `{name, <five numbers>, note, foods, source: "photo", photo}`. Pass `photo` to `log_food` to keep the picture with the entry. |
+| `text` | `{name, <five numbers>, note, foods, source: "text"}`. |
+| `label` | `{name, per_100, grams, unit, serving_g, pack_g, guessed, note, <five numbers>, source: "label", barcode?}`. |
+| `barcode` | Like `label`, plus `source: "barcode"`, `barcode`, `product_source` and `image_url?`. |
+| `dish` | `{name, <five numbers>, source: "dish", ref: <dish_id>, nutrition_source}`. Freshly estimated answers also have `note` and `foods`. |
+
+For `label` and `barcode`, the five numbers are for the amount eaten. `guessed` is `true` when no amount could be worked
+out, in which case one serving (or 100 g) was assumed.
+
+A label photo that shows a barcode teaches the product book, so the next scan of that barcode needs no photo.
+
+If a barcode is in neither the product book nor Open Food Facts, the call fails with "That product isn't in Open Food
+Facts yet…". The webhook reports this case as `need_label`.
+
+`dish` answers are kept per `dish_id`. `nutrition_source` is `own`, `recipe` or `ai`.
+
+### Recipes
+
+#### `food_diary.get_dishes` (response: only)
+
+Lists the dish library's recipes. Field: `person`. Returns an empty list when no dish library sensor is set.
+
+**Response:**
+
+```json
+{"dishes": [{"id": "…", "name": "…", "title": "…", "image": "", "source": "", "status": "", "favourite": false,
+             "times": 0, "meal_types": [], "added": "",
+             "kcal": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fibre_g": 0, "kcal_source": "own|recipe|ai",
+             "check": {…}}]}
+```
+
+- **The five numbers and `kcal_source`** appear only when the recipe book has numbers for the dish.
+- **`check`** appears only when the dish's numbers look wrong.
+- **`name` and `title`:** if a dish has a non-English `lang` and a different `name_en`, then `name` is the original name
+  (what goes on the plan) and `title` is `"<name> (<name_en>)"`. Otherwise both are `name_en`, falling back to `name`.
+
+#### `food_diary.get_dish_nutrition` (response: only)
+
+Returns the recipe book's numbers for one portion of a dish. Field: `dish_id` (**required**).
+
+**Response:** `{<five numbers>, "source", "at", "portions"?, "check"?, "completed"?, "from"?}`, or `{}` if the book
+doesn't have the dish.
+
+#### `food_diary.set_dish_nutrition` (response: optional)
+
+Sets a dish's numbers for one portion.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `dish_id` | string | **Required.** |
+| `kcal` | number | **Required.** |
+| `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | |
+| `source` | `own`, `recipe` or `ai` | Default `own`. `own` numbers are never doubted. |
+| `portions` | integer | 1 to 24. How many portions the recipe makes. |
+
+Setting new numbers clears any doubt about the dish. Entries for this dish from today onwards take the new numbers, in
+every diary, unless their numbers were edited.
+
+**Response:** `{<the stored numbers>, "source", "at", "portions"?, "refreshed": <entries updated>}`.
+
+#### `food_diary.sync_plan` (response: optional)
+
+Brings the diary in line with the meal plan now. Without this call, a sync happens about 10 seconds after the plan or
+dish library changes, and shortly after midnight. Field: `person`.
+
+**Response:** `{"changed": <entries added, changed or removed>, "completed": [<book keys whose partial numbers were completed>]}`.
+Without a meal plan sensor: `{"changed": 0, "completed": []}`.
+
+#### `food_diary.check_numbers` (response: only)
+
+Compares numbers with what the ingredients add up to, per portion. Give `dish_id`, or `entry_id` with `date`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `person` | entity id | |
+| `dish_id` | string | A dish in the dish library. |
+| `entry_id`, `date` | string, date | A diary entry. |
+| `portions` | integer | 1 to 24. How many portions to assume the recipe makes. |
+
+An entry without a library recipe is compared with one normal portion of the same name.
+
+**Response:**
+
+```json
+{"yours": {"kcal", "protein_g", "carbs_g", "fat_g"}, "house": {"kcal", "protein_g", "carbs_g", "fat_g"},
+ "portions": 2, "reason": "Low for 120 g chicken breast and 120 g rigatoni — may serve 2", "differs": true}
+```
+
+`house` holds the suggested numbers. It keeps that name for compatibility with the iOS app.
+
+#### `food_diary.dismiss_check` (response: optional)
+
+Confirms that a dish's numbers are right. The doubt goes and isn't raised again until the numbers change. Fields:
+`person`, `dish_id` (**required**).
+
+**Response:** `{"ok": true}`.
+
+## Webhook
+
+Each diary has a webhook at `/api/webhook/<webhook id>`. The id is shown under **Configure**. It accepts `POST` with a JSON
+body, works out the food, logs it immediately and answers with the numbers. A phone shortcut can then pass those numbers on,
+for example to a health app.
+
+Anyone who has the webhook id can log food to that diary, so treat it like a password.
+
+Request bodies:
+
+```json
+{"kind": "barcode", "barcode": "5000168001142", "amount": "3 biscuits"}
+{"kind": "label", "image": "<base64 JPEG>", "amount": "half the pack", "barcode": "<optional>"}
+{"kind": "photo", "image": "<base64 JPEG>", "hint": "<optional>"}
+{"kind": "text", "text": "2 eggs on toast"}
+```
+
+Every request can also include:
+
+- `"meal"`: if left out, the meal is chosen by the time of day;
+- `"quiet": "yes"` or `"notify": false`: skips the phone notification.
+
+Responses:
+
+```json
+{"ok": true, "status": "logged", "name": "…", "meal": "…", "entry_id": "…", "date": "…",
+ "kcal": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fibre_g": 0, "grams": 0, "unit": "g", "guessed": false,
+ "title": "Logged: …", "message": "44 g · 215 kcal · 1785 left today"}
+{"ok": false, "status": "need_label", "message": "…"}
+{"ok": false, "status": "error", "message": "…"}
+```
+
+A `need_label` response means the barcode is unknown. Photograph the label and send it back with the barcode.
+
+## Event
+
+Logging through `log_food`, the webhook or voice fires `food_diary_logged` with this data:
+
+```json
+{"person": "person.alex", "date": "…", "entry_id": "…", "name": "…", "meal": "…", "kcal": 0, "source": "…"}
+```
+
+## Voice (optional)
+
+The integration registers three Assist intents:
+
+| Intent | Example sentence | What it does |
+| --- | --- | --- |
+| `FoodDiaryLog` | "I had porridge for breakfast" | Estimates the food, logs it and says what's left. |
+| `FoodDiaryLeft` | "How many calories have I got left?" | Says today's calories left (or over). |
+| `FoodDiaryUndo` | "Take the last food off" | Removes the latest entry logged today. Planned meals are never removed this way. |
+
+To turn on the English sentences:
+
+1. Copy [`custom_sentences/en/food_diary.yaml`](../custom_sentences/en/food_diary.yaml) to
+   `<config>/custom_sentences/en/food_diary.yaml`.
+2. Restart Home Assistant.
+
+The sentences are deliberately narrow. "add" and "put" must name the food diary, so commands like "add milk to the shopping
+list" stay with their own handlers.
+
+A voice satellite has no user, so the diary is the speaker's if Home Assistant knows who is speaking, otherwise the only
+diary. With several diaries and no way to tell, Assist asks rather than guessing.
+
+## Meal plan sensor contract
+
+Any sensor can be a meal plan, such as a template sensor or one from another integration. Its **state** is ignored. Its
+`week` **attribute** is a list of days:
+
+```yaml
+week:
+  - date: "2026-10-08"            # YYYY-MM-DD, required
+    breakfast: "Porridge"         # optional
+    lunch: "Leftovers: Chilli con carne"
+    dinner: "Chicken katsu curry"
+  - date: "2026-10-09"
+    dinner: ""                    # empty or missing: nothing planned
+```
+
+How the plan is applied:
+
+- **Past days** are ignored.
+- **Planned meals:** each non-empty `breakfast`, `lunch` and `dinner` becomes one portion in the diary, with
+  `source: plan`, `plan_key: "<date>|<meal>"` and `note: "From the meal plan"`.
+- **Leftovers:** a `Leftovers:` prefix is ignored when matching a meal to a dish, so leftovers count as the same dish.
+- **Where the numbers come from**, first match wins:
+  1. the recipe book (`set_dish_nutrition`, or earlier estimates);
+  2. the dish's own `nutrition` from the dish library;
+  3. an AI estimate from the library dish's ingredients;
+  4. an AI estimate from the meal's name.
+
+  Matching is by name, case-insensitively, against a dish's `name` or `name_en`. Estimates are kept, so each one is only
+  asked once.
+- **Plan changes:** if a slot's meal changes, its entry is replaced. If the slot empties, the entry is removed, unless its
+  numbers were edited.
+- **Deleted entries:** if you delete a planned entry, it stays deleted until that slot's meal changes.
+- **No double counting:** if a meal was already logged by hand that day, the plan adds nothing.
+- **Recipe changes:** if the recipe book's numbers change (for example, the library's `nutrition` arrives later), planned
+  entries take them. Their portions stay, and entries whose numbers were edited are left alone.
+
+## Dish library sensor contract
+
+Its **state** is ignored. Its `dishes` **attribute** is a list of recipes:
+
+```yaml
+dishes:
+  - id: "chilli-1"                 # required, unique, stable; used as the entry's ref and the recipe book key
+    name: "Chilli con carne"       # the name used on the meal plan
+    name_en: "Chilli con carne"    # optional English name (also matched against the plan)
+    lang: "en"                     # optional language of `name`; non-English + name_en → title "name (name_en)"
+    servings: 4                    # optional: how many portions the ingredients make
+    amounts_per: "recipe"          # optional: "recipe" (default) or "portion"
+    ingredients:                   # optional: used to estimate numbers and to check printed ones
+      - {amount: "500 g", name: "beef mince"}
+      - {amount: "1 tin", name: "kidney beans"}
+    nutrition:                     # optional: the recipe's own numbers for ONE portion
+      {kcal: 520, protein_g: 38, carbs_g: 40, fat_g: 21, fibre_g: 9}
+    image: "/local/recipes/chilli.jpg"   # optional, shown on entries from this recipe
+    # optional, passed through by get_dishes for display:
+    source: "web"
+    status: "to_try"
+    favourite: false
+    times: 3
+    meal_types: [dinner]
+    added: "2026-09-30"
+```
+
+**Recipe numbers.** A dish's `nutrition` is stored in the recipe book as `recipe` numbers, unless the book already has
+`own` numbers for that dish. Partial numbers are completed once: for example, a recipe that prints only kcal and protein.
+The missing macros are filled from an estimate of the same dish, scaled so `4·protein + 4·carbs + 9·fat` matches the
+printed calories.
+
+## Recipe numbers check
+
+When a dish library is set, each recipe with both numbers and ingredients is checked in the background:
+
+- **When it runs:** about 90 seconds after start, then a minute after the plan or the library changes.
+- **What it asks:** the AI adds up the whole recipe once. The result is cached until the ingredients change.
+- **Per portion:** the total is divided by the recipe's portions. That is `portions` if set, otherwise `servings`. If
+  neither is set, it is 1 when `amounts_per: portion` and 2 otherwise.
+
+The numbers are in doubt when:
+
+- the calories are more than 30% off; or
+- the protein is more than 40% **and** more than 10 g off.
+
+A dish in doubt gets `check: {kcal, protein_g, carbs_g, fat_g, portions, reason}`. If a different number of portions
+explains the calories, the suggestion says so (for example "may serve 2"). If that portion count explains all the
+numbers, the dish isn't in doubt at all.
+
+`own` numbers and dismissed numbers are never doubted. The check appears on `get_dishes`, on `get_dish_nutrition`, and on
+`get_day` entries for that recipe whose numbers weren't edited.
+
+## Storage and privacy
+
+- **Diary data** lives in Home Assistant's `.storage` folder:
+  - `food_diary.<person>`: each person's diary;
+  - `food_diary.dishes`: the shared recipe book;
+  - `food_diary.products`: barcodes learned from Open Food Facts or label photos.
+- **Photos sent for estimates** are kept for 30 days in local media, under `food_diary/`, so AI Task can attach them.
+- **Photos kept with entries** are stored in `<config>/food_diary/photos`. They are only served to signed-in users.
+- **Data sent off the server:**
+  - photos and descriptions go to your AI Task provider;
+  - barcodes are looked up on Open Food Facts.

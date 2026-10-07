@@ -1,0 +1,66 @@
+# Food Diary voice sentences for Assist (English). Optional: copy this file to
+# <your config folder>/custom_sentences/en/food_diary.yaml and restart Home Assistant (or reload conversation).
+# The intents are handled by the food_diary integration (custom_components/food_diary/intent.py), locally, with no LLM.
+#
+# The sentences are kept narrow so they don't take over other commands:
+# - "add" and "put" always name the food diary ("add a yoghurt to my food diary"), so "add milk to the shopping list" and
+#   similar commands stay with their own handlers. Only "log" works without naming the diary.
+# - undo always says "food", "logged" or "food diary", never a bare "undo".
+language: en
+intents:
+  FoodDiaryLog:
+    data:
+      - sentences:
+          - "<i_had> {food} <for_meal> [today]"
+          - "<i_had> {food} [today]"
+          - "for [my] {meal} <i_had> {food}"
+          - "log {food} <for_meal>"
+          - "log {food}"
+          - "(log|add|put) {food} <in_diary>"
+          - "(log|add|put) {food} <for_meal> <in_diary>"
+          - "log {food} <in_diary> <for_meal>"
+  FoodDiaryLeft:
+    data:
+      - sentences:
+          - "how many calories (have I|I've|do I have|have I got|I have|I've got) [got] left [today]"
+          - "how many calories [are] left [today]"
+          - "calories left [today]"
+          - "how am I doing (on|for|with) [my] calories [today]"
+          - "how are my calories [doing|looking] [today]"
+          - "what's left (of|on) my calories [today]"
+  FoodDiaryUndo:
+    data:
+      - sentences:
+          - "take [the] last (food|thing I logged|thing I ate|thing I had) off [<diary>]"
+          - "take that off <diary>"
+          - "remove [the] last (food|thing I logged|thing I ate|thing I had) [from <diary>]"
+          - "remove [the] last thing from <diary>"
+          - "remove that from <diary>"
+          - "(undo|delete) [the] last (food|thing I logged) [entry]"
+          - "(undo|delete|remove) [the] last food diary entry"
+lists:
+  food:
+    wildcard: true
+  meal:
+    values:
+      - in: breakfast
+        out: breakfast
+      - in: brekkie
+        out: breakfast
+      - in: lunch
+        out: lunch
+      - in: dinner
+        out: dinner
+      - in: tea
+        out: dinner
+      - in: supper
+        out: dinner
+      - in: snack
+        out: snack
+      - in: a snack
+        out: snack
+expansion_rules:
+  i_had: "(I|I've|I have) [just] (had|ate|eaten)"
+  for_meal: "(for|as) [my] {meal}"
+  diary: "[my|the] food (diary|log)"
+  in_diary: "(in|into|to|on) <diary>"

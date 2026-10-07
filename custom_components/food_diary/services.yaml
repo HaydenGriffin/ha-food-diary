@@ -1,0 +1,575 @@
+log_food:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    name:
+      required: true
+      selector:
+        text: {}
+    kcal:
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 0.1
+          mode: box
+          unit_of_measurement: kcal
+    protein_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    carbs_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    fat_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    fibre_g:
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    portions:
+      default: 1
+      selector:
+        number:
+          min: 0.05
+          max: 50
+          step: 0.05
+          mode: box
+    meal:
+      selector:
+        select:
+          options:
+          - breakfast
+          - lunch
+          - dinner
+          - snack
+    date:
+      selector:
+        date: {}
+    source:
+      default: manual
+      selector:
+        select:
+          options:
+          - photo
+          - label
+          - barcode
+          - text
+          - dish
+          - manual
+          - again
+          - saved
+          - voice
+    ref:
+      selector:
+        text: {}
+    note:
+      selector:
+        text: {}
+    barcode:
+      selector:
+        text: {}
+    per_100:
+      selector:
+        object: {}
+    grams:
+      selector:
+        number:
+          min: 0
+          max: 20000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    unit:
+      selector:
+        select:
+          options:
+          - g
+          - ml
+    edited:
+      selector:
+        boolean: {}
+    photo:
+      selector:
+        text: {}
+    image_url:
+      selector:
+        text: {}
+update_food:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    entry_id:
+      required: true
+      selector:
+        text: {}
+    date:
+      selector:
+        date: {}
+    portions:
+      selector:
+        number:
+          min: 0.05
+          max: 50
+          step: 0.05
+          mode: box
+    grams:
+      selector:
+        number:
+          min: 0
+          max: 20000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    meal:
+      selector:
+        select:
+          options:
+          - breakfast
+          - lunch
+          - dinner
+          - snack
+    name:
+      selector:
+        text: {}
+    kcal:
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 0.1
+          mode: box
+          unit_of_measurement: kcal
+    protein_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    carbs_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    fat_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    fibre_g:
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    checked:
+      selector:
+        boolean: {}
+delete_food:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    entry_id:
+      required: true
+      selector:
+        text: {}
+    date:
+      selector:
+        date: {}
+get_day:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    date:
+      selector:
+        date: {}
+get_history:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    date:
+      selector:
+        date: {}
+    days:
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 366
+          mode: box
+get_recent:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    limit:
+      example: 30
+      selector:
+        number:
+          min: 1
+          max: 200
+set_goals:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    kcal:
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 0.1
+          mode: box
+          unit_of_measurement: kcal
+    protein_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    carbs_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    fat_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    fibre_g:
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+estimate:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    kind:
+      required: true
+      selector:
+        select:
+          options:
+          - photo
+          - label
+          - barcode
+          - text
+          - dish
+    image:
+      selector:
+        text: {}
+    amount:
+      selector:
+        text: {}
+    hint:
+      selector:
+        text: {}
+    text:
+      selector:
+        text: {}
+    barcode:
+      selector:
+        text: {}
+    dish_id:
+      selector:
+        text: {}
+    dish_name:
+      selector:
+        text: {}
+    ingredients:
+      selector:
+        text:
+          multiple: true
+    servings:
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: box
+    amounts_per:
+      default: recipe
+      selector:
+        select:
+          options:
+          - recipe
+          - portion
+    fresh:
+      selector:
+        boolean: {}
+get_dish_nutrition:
+  fields:
+    dish_id:
+      required: true
+      selector:
+        text: {}
+set_dish_nutrition:
+  fields:
+    dish_id:
+      required: true
+      selector:
+        text: {}
+    kcal:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 0.1
+          mode: box
+          unit_of_measurement: kcal
+    protein_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    carbs_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    fat_g:
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    fibre_g:
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    source:
+      default: own
+      selector:
+        select:
+          options:
+          - own
+          - recipe
+          - ai
+    portions:
+      selector:
+        number:
+          min: 1
+          max: 24
+          mode: box
+save_meal:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    name:
+      required: true
+      example: My usual breakfast
+      selector:
+        text: {}
+    date:
+      selector:
+        date: {}
+    meal:
+      required: true
+      selector:
+        select:
+          options: [breakfast, lunch, dinner, snack]
+update_saved_meal:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    saved_id:
+      required: true
+      selector:
+        text: {}
+    name:
+      example: Weekday breakfast
+      selector:
+        text: {}
+    meal:
+      selector:
+        select:
+          options: [breakfast, lunch, dinner, snack]
+delete_saved_meal:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    saved_id:
+      required: true
+      selector:
+        text: {}
+get_week_review:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    date:
+      selector:
+        date: {}
+    days:
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 31
+get_dishes:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+sync_plan:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+set_photo:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    entry_id:
+      required: true
+      selector:
+        text: {}
+    date:
+      selector:
+        date: {}
+    image:
+      required: true
+      selector:
+        text:
+          multiline: true
+copy_day:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    from:
+      required: true
+      selector:
+        date: {}
+    to:
+      required: true
+      selector:
+        date: {}
+    meal:
+      selector:
+        select:
+          options: [breakfast, lunch, dinner, snack]
+    replace:
+      default: false
+      selector:
+        boolean: {}
+undo_copy:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    token:
+      required: true
+      selector:
+        text: {}
+check_numbers:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    dish_id:
+      selector:
+        text: {}
+    entry_id:
+      selector:
+        text: {}
+    date:
+      selector:
+        date: {}
+    portions:
+      selector:
+        number:
+          min: 1
+          max: 24
+          mode: box
+dismiss_check:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    dish_id:
+      required: true
+      selector:
+        text: {}

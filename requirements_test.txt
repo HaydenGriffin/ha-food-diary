@@ -1,0 +1,6 @@
+# Test dependencies, pinned to the Home Assistant release the tests run against (2026.2.3).
+pytest-homeassistant-custom-component==0.13.316
+# Needed by Home Assistant's conversation integration, which the voice sentence tests load.
+hassil==3.5.0
+home-assistant-intents==2026.1.28
+ruff==0.16.10

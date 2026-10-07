@@ -1,0 +1,53 @@
+name: iOS app
+
+on:
+  push:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  pull_request:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)" && xcodebuild -version
+
+      - name: Generate the project
+        run: brew install xcodegen && xcodegen generate
+
+      - name: Pick a simulator
+        run: |
+          id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for r in sorted(d, reverse=True) if "iOS" in r for x in d[r] if x["name"].startswith("iPhone")))')
+          echo "SIM=$id" >> "$GITHUB_ENV"
+
+      - name: Build (all targets, unsigned)
+        run: |
+          xcodebuild -project Food.xcodeproj -scheme Food -destination "id=$SIM" -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build-for-testing | tail -20
+
+      - name: UI tests against the mock
+        run: |
+          python3 tools/mock_ha.py 8811 &
+          sleep 1
+          # The share-sheet test needs a signed build (the extension reads the sign-in from the shared keychain group).
+          xcodebuild -project Food.xcodeproj -scheme Food -destination "id=$SIM" -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO test-without-building -only-testing:FoodUITests/FoodUITests \
+            -skip-testing:FoodUITests/FoodUITests/test19_SharePhoto -resultBundlePath build/UITests.xcresult
+
+      - name: Keep the screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-tests
+          path: |
+            /tmp/food-shots
+            ios/build/UITests.xcresult
+          if-no-files-found: ignore

@@ -1,0 +1,13 @@
+// Copy to Config/Local.xcconfig (gitignored) and fill in. Then run `xcodegen` again.
+
+// A reverse-DNS prefix you control, e.g. your domain backwards.
+BUNDLE_ID_PREFIX = com.yourname
+
+// Your 10-character Apple team id (Xcode → Settings → Accounts → your team).
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Optional: your own OAuth client page, if you host one (see docs/auth/index.html).
+// HA_CLIENT_ID = https:/$()/yourname.github.io/ha-food-diary/auth/
+
+// Optional: the address the sign-in screen suggests.
+// HA_DEFAULT_SERVER = https:/$()/homeassistant.example.com

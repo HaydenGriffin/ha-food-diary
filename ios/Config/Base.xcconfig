@@ -1,0 +1,21 @@
+// Shared build settings for every target. Committed; holds placeholders only.
+//
+// Put your own values in Config/Local.xcconfig (gitignored; copy Config/Local.xcconfig.example).
+// Anything set there overrides what's below.
+
+// Reverse-DNS prefix for the bundle ids. The app is $(BUNDLE_ID_PREFIX).food, its extensions .food.widgets and
+// .food.share; the App Group and keychain group are derived from it too.
+BUNDLE_ID_PREFIX = com.example.fooddiary
+
+// Your Apple developer team id (Xcode → Settings → Accounts). Not needed for simulator builds.
+DEVELOPMENT_TEAM =
+
+// Home Assistant OAuth client_id: a URL whose page carries <link rel="redirect_uri" href="fooddiary://auth">.
+// The default is the project's GitHub Pages page (docs/auth/index.html). Host your own copy if you fork the app.
+// ("//" starts a comment in xcconfig files, hence the $() in the middle.)
+HA_CLIENT_ID = https:/$()/haydengriffin.github.io/ha-food-diary/auth/
+
+// The Home Assistant address the sign-in screen suggests. Users can change it before signing in.
+HA_DEFAULT_SERVER = http:/$()/homeassistant.local:8123
+
+#include? "Local.xcconfig"

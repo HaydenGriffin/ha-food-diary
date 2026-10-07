@@ -1,0 +1,14 @@
+{
+  "domain": "food_diary",
+  "name": "Food Diary",
+  "after_dependencies": ["ai_task", "mobile_app"],
+  "codeowners": ["@HaydenGriffin"],
+  "config_flow": true,
+  "dependencies": ["http", "webhook"],
+  "documentation": "https://github.com/HaydenGriffin/ha-food-diary",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/HaydenGriffin/ha-food-diary/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
