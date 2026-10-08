@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 from pathlib import Path
 import re
 import time
@@ -30,6 +31,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import MAX_IMAGE_BYTES, NUM, OFF_FIELDS, OFF_URL, OFF_USER_AGENT, PHOTO_DAYS, PHOTO_DIR
 from .diary import Book, num, nums
 
+_LOGGER = logging.getLogger(__name__)
 LABELS = {
     "kcal": "Calories (kcal)",
     "protein_g": "Protein in grams",
@@ -405,10 +407,20 @@ class Estimator:
         fresh: bool = False,
     ) -> dict[str, Any]:
         if not fresh and (known := self.dishes.get(dish_id)) and num(known.get("kcal")):
-            return {**nums(known), "name": name, "source": "dish", "ref": dish_id, "nutrition_source": known.get("source", "ai")}
+            return self._known_dish(dish_id, name, known)
+        before = self.dishes.version(dish_id)
         out = await self.dish_ai(name, ingredients, servings, amounts_per)
-        self.dishes.set(dish_id, {**nums(out), "source": "ai"})
+        if self.dishes.version(dish_id) != before:  # numbers arrived while the AI worked (typed, say): they win
+            _LOGGER.debug("Not keeping the AI's numbers for %s: the recipe book changed meanwhile", dish_id)
+            if not fresh and (known := self.dishes.get(dish_id)) and num(known.get("kcal")):
+                return self._known_dish(dish_id, name, known)
+        else:
+            self.dishes.set(dish_id, {**nums(out), "source": "ai"})
         return {**out, "name": name or out["name"], "ref": dish_id, "nutrition_source": "ai"}
+
+    @staticmethod
+    def _known_dish(dish_id: str, name: str, known: dict[str, Any]) -> dict[str, Any]:
+        return {**nums(known), "name": name, "source": "dish", "ref": dish_id, "nutrition_source": known.get("source", "ai")}
 
     async def dish_ai(
         self, name: str, ingredients: list[str] | None, servings: float = 0, amounts_per: str = "recipe"

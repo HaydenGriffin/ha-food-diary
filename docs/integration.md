@@ -68,11 +68,15 @@ Each diary adds one device, `<Person> food diary`, with these entities:
 | `sensor.<person>_food_diary_calories_today` | kcal | Attributes: `goal`, `left`, `logged` (entry count), and `breakfast`, `lunch`, `dinner`, `snack` (kcal per meal). |
 | `sensor.<person>_food_diary_protein_today`, `…_carbs_today`, `…_fat_today`, `…_fibre_today` | g | Attributes: `goal`, `left`. |
 | `sensor.<person>_food_diary_calories_left` | kcal | Calories left against the goal (negative when over). Attribute: `goal`. |
-| `sensor.<person>_food_diary_last_logged` | timestamp | Attributes: `name`, `kcal`, `meal`. |
+| `sensor.<person>_food_diary_last_logged` | timestamp | Attributes: `name`, `kcal`, `meal`, `entry_id`, `rev`. |
 | `number.<person>_food_diary_calorie_goal`, `…_protein_goal`, `…_carbs_goal`, `…_fat_goal`, `…_fibre_goal` | kcal / g | Daily goals. Default 2000 kcal, 100 g protein, 230 g carbs, 70 g fat and 30 g fibre. |
 
 The five "today" sensors use `state_class: total` and reset at local midnight. That keeps long-term statistics, history
 graphs and averages working.
+
+Every diary sensor also has the attribute `api`: the version of the service contract this diary supports. It is `2` from
+release 1.1.0 (creates take [`client_id`](#doing-things-once-and-revisions), entries carry `rev` and changes take
+`expected_rev`). Apps should only send `client_id` and `expected_rev` to a diary whose `api` is 2 or more.
 
 ## Choosing a diary
 
@@ -96,6 +100,31 @@ otherwise:
 "Response: optional" means the service can be called with or without `return_response`. "Response: only" means it must be
 called with a response.
 
+### Doing things once, and revisions
+
+**`client_id`.** `log_food`, `copy_day` and the [webhook](#webhook) accept an optional `client_id`: an id the app makes
+once for one action (8 to 64 letters, digits, `-` or `_`; a UUID is fine), kept with the request so a retry sends the
+same one. The diary remembers every `client_id` it has seen, with the entry it made, in a ledger that is never trimmed and
+outlives the entry. So:
+
+- the same `client_id` with the same request returns the first result with `duplicate: true`, and nothing new is made;
+- if that entry has been deleted since, the response says `deleted: true` (and gives the original `entry_id`), and the
+  food is **not** logged again;
+- the same `client_id` with a different request fails with a validation error (translation key `client_id_reused`);
+- two calls with the same `client_id` at the same time make one entry: the second waits for the first.
+
+Without `client_id`, every call makes a new entry, as before. The diary never makes up ids itself. "The same request"
+means the same service data apart from `client_id` (compared as SHA-256 of its canonical JSON).
+
+**`rev`.** Every entry has an integer `rev`: 1 when it's made, and one more on every change (by you, the planner or a
+recipe's new numbers). `update_food`, `delete_food` and `set_photo` accept an optional `expected_rev`: the `rev` you last
+saw. If the entry has changed since, nothing happens and the call fails with a validation error (translation key
+`conflict`); get the day again and decide.
+
+Background work that waits for the AI (the meal planner, recipe estimates, completing partial recipe numbers) notes what
+it started from and only keeps its answer if that is still the same afterwards. Food logged by hand, an edit, a deletion or
+a new plan in the meantime always wins.
+
 ### Entry shape
 
 The responses below refer to an **entry**. It has this shape:
@@ -105,7 +134,7 @@ The responses below refer to an **entry**. It has this shape:
   "id": "a1b2c3d4e5", "at": "2026-10-07T08:15+01:00", "meal": "breakfast", "name": "Porridge",
   "portions": 1.5, "source": "manual", "ref": "",
   "per_portion": {"kcal": 320, "protein_g": 12, "carbs_g": 54, "fat_g": 6, "fibre_g": 5},
-  "kcal": 480, "protein_g": 18, "carbs_g": 81, "fat_g": 9, "fibre_g": 7.5
+  "kcal": 480, "protein_g": 18, "carbs_g": 81, "fat_g": 9, "fibre_g": 7.5, "rev": 1
 }
 ```
 
@@ -118,6 +147,9 @@ Some keys appear only when they apply:
 | `plan_key` | The planned slot it came from (`"<date>|<meal>"`). |
 | `edited: true` | The numbers were typed by hand, so the planner and recipe updates leave them alone. |
 | `checked: true` | The entry was confirmed as right. |
+| `client_id` | The `client_id` it was logged with. |
+
+`rev` is always there (see [Doing things once, and revisions](#doing-things-once-and-revisions)).
 
 Entries returned by `get_day`, `get_recent` and `set_photo` also carry `image`. That is the first that exists of:
 
@@ -153,12 +185,14 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 | `edited` | boolean | Marks the numbers as typed by hand. |
 | `photo` | string | The `photo` value an `estimate` returned. The picture is kept with the entry. |
 | `image_url` | string | An `https://` product picture. |
+| `client_id` | string | See [Doing things once](#doing-things-once-and-revisions). |
 
 The time-of-day meal is breakfast before 10:30, lunch before 14:30, snack before 17:30, dinner before 21:30, and snack
 after that.
 
-**Response:** `{"entry": <entry>, "date": "<date>", "totals": {<five numbers>}}`. Also fires
-[`food_diary_logged`](#event).
+**Response:** `{"entry": <entry>, "entry_id": "…", "date": "<date>", "totals": {<five numbers>}}`. Also fires
+[`food_diary_logged`](#event). A repeated `client_id` adds `"duplicate": true` and returns the entry as it is now; once
+that entry is deleted, `"entry"` is `null` and `"deleted": true` is added. A repeat fires no event.
 
 #### `food_diary.update_food` (response: optional)
 
@@ -175,20 +209,21 @@ Changes an existing entry.
 | `name` | string | |
 | `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | Your own numbers for the **whole** entry. Sets `edited`. |
 | `checked` | boolean | `true` marks the entry as confirmed right. `false` clears it. |
+| `expected_rev` | integer | Fail with `conflict` if the entry's `rev` isn't this. |
 
 **Response:** `{"entry": <entry>}`.
 
 #### `food_diary.delete_food` (response: optional)
 
-Removes an entry. Fields: `person`, `entry_id` (**required**), `date`. If you remove a planned entry, the planner
-remembers it and won't add it back.
+Removes an entry. Fields: `person`, `entry_id` (**required**), `date`, `expected_rev`. If you remove a planned entry, the
+planner remembers it and won't add it back.
 
 **Response:** `{"ok": true}`.
 
 #### `food_diary.set_photo` (response: optional)
 
-Adds a photo to an existing entry. Fields: `person`, `entry_id` (**required**), `date`, and `image` (**required**, a
-base64 JPEG, PNG or WebP of up to 4 MB).
+Adds a photo to an existing entry. Fields: `person`, `entry_id` (**required**), `date`, `expected_rev`, and `image`
+(**required**, a base64 JPEG, PNG or WebP of up to 4 MB).
 
 **Response:** `{"entry": <entry with image>}`.
 
@@ -300,7 +335,8 @@ Removes a saved meal. Fields: `person`, `saved_id` (**required**).
 
 #### `food_diary.copy_day` (response: optional)
 
-Copies a day, or one meal of it, onto other days. Planned food arrives as ordinary food (`source: again`).
+Copies a day, or one meal of it, onto other days. Each copy is eaten exactly like the original: the same portions, grams
+and numbers (numbers typed by hand too). Planned food arrives as ordinary food (`source: again`).
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -309,8 +345,11 @@ Copies a day, or one meal of it, onto other days. Planned food arrives as ordina
 | `to` | list of dates | **Required.** |
 | `meal` | meal | Copy just this meal. |
 | `replace` | boolean | Remove what the target days already have in that meal (or the whole day) first. |
+| `client_id` | string | See [Doing things once](#doing-things-once-and-revisions). |
 
-**Response:** `{"token": "…", "added": {"<date>": <count>}, "removed": {"<date>": <count>}}`.
+**Response:** `{"token": "…", "added": {"<date>": <count>}, "removed": {"<date>": <count>}}`. A repeated `client_id`
+returns the first copy's response with `"duplicate": true` (and `"deleted": true` once every copied entry is gone, after
+an `undo_copy`, say).
 
 #### `food_diary.undo_copy` (response: optional)
 
@@ -464,7 +503,9 @@ Request bodies:
 Every request can also include:
 
 - `"meal"`: if left out, the meal is chosen by the time of day;
-- `"quiet": "yes"` or `"notify": false`: skips the phone notification.
+- `"quiet": "yes"` or `"notify": false`: skips the phone notification;
+- `"client_id"`: see [Doing things once](#doing-things-once-and-revisions). A shortcut that retries should send the same
+  one. A repeat answers like the first time, with `"duplicate": true`, without asking the AI or notifying again.
 
 Responses:
 
@@ -472,9 +513,14 @@ Responses:
 {"ok": true, "status": "logged", "name": "…", "meal": "…", "entry_id": "…", "date": "…",
  "kcal": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fibre_g": 0, "grams": 0, "unit": "g", "guessed": false,
  "title": "Logged: …", "message": "44 g · 215 kcal · 1785 left today"}
+{"ok": true, "status": "deleted", "entry_id": "…", "date": "…", "duplicate": true, "deleted": true, "message": "…"}
 {"ok": false, "status": "need_label", "message": "…"}
 {"ok": false, "status": "error", "message": "…"}
+{"ok": false, "status": "error", "error": "client_id_reused", "message": "…"}
 ```
+
+`logged` responses also carry the entry's `rev`. `deleted` answers a repeated `client_id` whose entry has been removed
+since: it is not logged again. `client_id_reused` (HTTP 409) means the id was already used with a different body.
 
 A `need_label` response means the barcode is unknown. Photograph the label and send it back with the barcode.
 
@@ -600,7 +646,7 @@ numbers, the dish isn't in doubt at all.
 ## Storage and privacy
 
 - **Diary data** lives in Home Assistant's `.storage` folder:
-  - `food_diary.<person>`: each person's diary;
+  - `food_diary.<person>`: each person's diary, with its `client_id` ledger;
   - `food_diary.dishes`: the shared recipe book;
   - `food_diary.products`: barcodes learned from Open Food Facts or label photos.
 - **Photos sent for estimates** are kept for 30 days in local media, under `food_diary/`, so AI Task can attach them.

@@ -174,6 +174,10 @@
         "image_url": {
           "name": "Product photo",
           "description": "An https picture of the product (from Open Food Facts, say)."
+        },
+        "client_id": {
+          "name": "Client ID",
+          "description": "An id your app makes for this one action (8–64 letters, digits, - or _; a UUID is fine). Sending the same id again returns the first result, with duplicate: true, instead of adding again. The same id with different data is refused."
         }
       }
     },
@@ -232,6 +236,10 @@
         "checked": {
           "name": "Checked",
           "description": "Mark the entry as confirmed right (for example, a likely double entry that isn't one). False clears it."
+        },
+        "expected_rev": {
+          "name": "Expected revision",
+          "description": "The entry's rev as you last saw it. If the entry has changed since, nothing changes and the action fails with a conflict."
         }
       }
     },
@@ -250,6 +258,10 @@
         "date": {
           "name": "Date",
           "description": "The entry's day. Leave out for today."
+        },
+        "expected_rev": {
+          "name": "Expected revision",
+          "description": "The entry's rev as you last saw it. If the entry has changed since, nothing changes and the action fails with a conflict."
         }
       }
     },
@@ -550,6 +562,10 @@
         "image": {
           "name": "Photo",
           "description": "JPEG or PNG, base64."
+        },
+        "expected_rev": {
+          "name": "Expected revision",
+          "description": "The entry's rev as you last saw it. If the entry has changed since, nothing changes and the action fails with a conflict."
         }
       }
     },
@@ -576,6 +592,10 @@
         "replace": {
           "name": "Replace",
           "description": "Take off what's already there first."
+        },
+        "client_id": {
+          "name": "Client ID",
+          "description": "An id your app makes for this one copy (8–64 letters, digits, - or _). Sending the same id again returns the first copy's result, with duplicate: true, instead of copying again."
         }
       }
     },
@@ -632,6 +652,14 @@
           "description": "The recipe."
         }
       }
+    }
+  },
+  "exceptions": {
+    "client_id_reused": {
+      "message": "That client_id was already used for a different request. Make a new id for each action."
+    },
+    "conflict": {
+      "message": "That entry has changed since you last saw it. Reload it and try again."
     }
   }
 }

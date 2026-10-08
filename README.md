@@ -49,6 +49,9 @@ The full feature list, build steps and signing notes are in [`ios/README.md`](io
 - **Plans become entries.** If you keep a meal plan in Home Assistant, point the integration at it and planned meals
   appear in the diary as estimates you can confirm or change. A background check flags recipe numbers that look wrong.
 - **Works without signal.** Foods with known numbers queue on the phone and go in when Home Assistant is reachable.
+- **Retries are safe, newer edits win.** Logging takes an optional `client_id`, so a double tap or a resent request makes
+  one entry; entries carry a revision, and background AI work never overwrites a change made while it was thinking
+  ([details](docs/integration.md#doing-things-once-and-revisions)).
 
 ## Getting started
 

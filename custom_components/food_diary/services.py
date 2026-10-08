@@ -1,5 +1,9 @@
 """Food diary services. Each one works on the caller's own diary (the person linked to their Home Assistant user); add
-`person` to choose another, and with a single diary set up, calls from automations and scripts use that one."""
+`person` to choose another, and with a single diary set up, calls from automations and scripts use that one.
+
+Creating services (log_food, copy_day) take an optional `client_id`: the same id again returns the first result with
+`duplicate: true` (and `deleted: true` once its entry is gone) instead of creating again. Changing services take an optional
+`expected_rev`: the entry's `rev` as the caller last saw it; when it has changed since, the call fails with `conflict`."""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ from homeassistant.helpers import config_validation as cv
 import voluptuous as vol
 
 from .const import DISH_SOURCES, DOMAIN, MEALS, NUM, SOURCES
-from .diary import Book, num, nums, today
+from .diary import Book, Diary, num, nums, today
 from .library import read_dishes
 from .notifications import fire_logged
 from .photos import with_images
@@ -28,6 +32,8 @@ BASE = {vol.Optional(ATTR_PERSON): cv.entity_id}
 DATE = vol.Optional("date")
 PORTIONS = vol.All(vol.Coerce(float), vol.Range(min=0.05, max=50))
 RECIPE_PORTIONS = vol.All(vol.Coerce(int), vol.Range(min=1, max=24))
+CLIENT_ID = vol.All(cv.string, vol.Match(r"^[A-Za-z0-9_-]{8,64}$"))  # made by the app, once per action (a UUID is fine)
+EXPECTED_REV = vol.All(vol.Coerce(int), vol.Range(min=1))
 
 LOG_SCHEMA = vol.Schema(
     {
@@ -47,6 +53,7 @@ LOG_SCHEMA = vol.Schema(
         vol.Optional("edited"): cv.boolean,
         vol.Optional("photo"): cv.string,
         vol.Optional("image_url"): cv.string,
+        vol.Optional("client_id"): CLIENT_ID,
     }
 )
 UPDATE_SCHEMA = vol.Schema(
@@ -60,9 +67,12 @@ UPDATE_SCHEMA = vol.Schema(
         vol.Optional("meal"): vol.In(MEALS),
         vol.Optional("name"): cv.string,
         vol.Optional("checked"): cv.boolean,
+        vol.Optional("expected_rev"): EXPECTED_REV,
     }
 )
-ENTRY_SCHEMA = vol.Schema({**BASE, vol.Required("entry_id"): cv.string, DATE: cv.date})
+ENTRY_SCHEMA = vol.Schema(
+    {**BASE, vol.Required("entry_id"): cv.string, DATE: cv.date, vol.Optional("expected_rev"): EXPECTED_REV}
+)
 DAY_SCHEMA = vol.Schema({**BASE, DATE: cv.date})
 HISTORY_SCHEMA = vol.Schema(
     {**BASE, DATE: cv.date, vol.Optional("days", default=7): vol.All(vol.Coerce(int), vol.Range(min=1, max=366))}
@@ -85,7 +95,15 @@ ESTIMATE_SCHEMA = vol.Schema(
         vol.Optional("fresh", default=False): cv.boolean,
     }
 )
-PHOTO_SCHEMA = vol.Schema({**BASE, vol.Required("entry_id"): cv.string, DATE: cv.date, vol.Required("image"): cv.string})
+PHOTO_SCHEMA = vol.Schema(
+    {
+        **BASE,
+        vol.Required("entry_id"): cv.string,
+        DATE: cv.date,
+        vol.Required("image"): cv.string,
+        vol.Optional("expected_rev"): EXPECTED_REV,
+    }
+)
 COPY_SCHEMA = vol.Schema(
     {
         **BASE,
@@ -93,6 +111,7 @@ COPY_SCHEMA = vol.Schema(
         vol.Required("to"): vol.All(cv.ensure_list, [cv.date]),
         vol.Optional("meal"): vol.In(MEALS),
         vol.Optional("replace", default=False): cv.boolean,
+        vol.Optional("client_id"): CLIENT_ID,
     }
 )
 UNCOPY_SCHEMA = vol.Schema({**BASE, vol.Required("token"): cv.string})
@@ -169,6 +188,36 @@ def public(item: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in item.items() if k not in INTERNAL}
 
 
+def repeat_flags(repeat: bool, deleted: bool) -> dict[str, bool]:
+    return {**({"duplicate": True} if repeat else {}), **({"deleted": True} if deleted else {})}
+
+
+def logged(diary: Diary, record: dict[str, Any], repeat: bool) -> dict[str, Any]:
+    """log_food's answer, for a new entry or a repeated client_id: the entry as it is now (None once it's deleted)."""
+    d = record["date"]
+    e = diary.find(d, record["entry_id"])
+    return {
+        "entry": e,
+        "entry_id": record["entry_id"],
+        "date": d,
+        "totals": diary.day(d)["totals"],
+        **repeat_flags(repeat, e is None),
+    }
+
+
+def copied(diary: Diary, record: dict[str, Any], repeat: bool) -> dict[str, Any]:
+    """copy_day's answer, for a new copy or a repeated client_id (`deleted` once every copied entry is gone)."""
+    c = record["copy"]
+    ids = [(d, i) for d, added in c["added"].items() for i in added]
+    gone = bool(ids) and all(diary.find(d, i) is None for d, i in ids)
+    return {
+        "token": c["token"],
+        "added": {d: len(i) for d, i in c["added"].items()},
+        "removed": dict(c["removed"]),
+        **repeat_flags(repeat, gone),
+    }
+
+
 @callback
 def async_register_services(hass: HomeAssistant) -> None:
     """Register every food_diary service (once, in async_setup)."""
@@ -188,21 +237,28 @@ def async_register_services(hass: HomeAssistant) -> None:
         if not num(f.get("kcal")) and not (f.get("per_100") and num(f.get("grams"))):
             raise ServiceValidationError("Give kcal, or per_100 with grams.")
         day = f.pop("date").isoformat() if f.get("date") else today()
-        if f.get("photo"):  # the meal photo it was estimated from: kept with the entry
-            f["photo"] = await hass.data[DOMAIN]["photos"].keep_estimated(f["photo"])
-        e = data.diary.add(day, f)
-        fire_logged(hass, data, day, e, call.context)
-        return {"entry": e, "date": day, "totals": data.diary.day(day)["totals"]}
+
+        async def create() -> dict[str, Any]:
+            if f.get("photo"):  # the meal photo it was estimated from: kept with the entry
+                f["photo"] = await hass.data[DOMAIN]["photos"].keep_estimated(f["photo"])
+            e = data.diary.add(day, f)
+            fire_logged(hass, data, day, e, call.context)
+            return {"entry_id": e["id"], "date": day}
+
+        record, repeat = await data.diary.create_once(call.data.get("client_id"), dict(call.data), create)
+        return logged(data.diary, record, repeat)
 
     async def update_food(call: ServiceCall) -> ServiceResponse:
         data = resolve(hass, call)
-        changes = {k: v for k, v in call.data.items() if k not in (ATTR_PERSON, "entry_id", "date")}
-        if (e := data.diary.update(day_of(call), call.data["entry_id"], changes)) is None:
+        changes = {k: v for k, v in call.data.items() if k not in (ATTR_PERSON, "entry_id", "date", "expected_rev")}
+        e = data.diary.update(day_of(call), call.data["entry_id"], changes, call.data.get("expected_rev"))
+        if e is None:
             raise ServiceValidationError(NOT_IN_DIARY)
         return {"entry": e}
 
     async def delete_food(call: ServiceCall) -> ServiceResponse:
-        if resolve(hass, call).diary.delete(day_of(call), call.data["entry_id"]) is None:
+        diary = resolve(hass, call).diary
+        if diary.delete(day_of(call), call.data["entry_id"], expected_rev=call.data.get("expected_rev")) is None:
             raise ServiceValidationError(NOT_IN_DIARY)
         return {"ok": True}
 
@@ -229,19 +285,22 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def set_photo(call: ServiceCall) -> ServiceResponse:
         data = resolve(hass, call)
         name = await hass.data[DOMAIN]["photos"].keep(call.data["image"])
-        if (e := data.diary.set_photo(day_of(call), call.data["entry_id"], name)) is None:
+        if (e := data.diary.set_photo(day_of(call), call.data["entry_id"], name, call.data.get("expected_rev"))) is None:
             raise ServiceValidationError(NOT_IN_DIARY)
         return {"entry": with_images(hass, data, [e])[0]}
 
     async def copy_day(call: ServiceCall) -> ServiceResponse:
         diary = resolve(hass, call).diary
         targets = sorted({d.isoformat() for d in call.data["to"]})
-        r = diary.copy(call.data["from"].isoformat(), targets, call.data.get("meal"), call.data["replace"])
-        return {
-            "token": r["token"],
-            "added": {d: len(i) for d, i in r["added"].items()},
-            "removed": {d: len(g) for d, g in r["removed"].items()},
-        }
+
+        async def create() -> dict[str, Any]:
+            r = diary.copy(call.data["from"].isoformat(), targets, call.data.get("meal"), call.data["replace"])
+            removed = {d: len(g) for d, g in r["removed"].items()}
+            added = {d: list(ids) for d, ids in r["added"].items()}
+            return {"copy": {"token": r["token"], "added": added, "removed": removed}}
+
+        record, repeat = await diary.create_once(call.data.get("client_id"), dict(call.data), create)
+        return copied(diary, record, repeat)
 
     async def undo_copy(call: ServiceCall) -> ServiceResponse:
         if not resolve(hass, call).diary.uncopy(call.data["token"]):

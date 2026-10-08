@@ -15,6 +15,11 @@ Then:
 - a planned entry that's deleted is remembered and not put back (until that slot's meal changes);
 - something already logged in that meal on that day → the plan adds nothing (no double counting).
 Past days are never touched.
+
+Working numbers out can mean waiting for the AI. What a slot looked like (its planned meal, the dish's ingredients and the
+entries in that meal, with their revisions) is noted before asking, and the answer is only used when it is all still the
+same afterwards: food logged by hand meanwhile, an edit, a deletion or a new plan always wins, and the next sync starts
+from what is there now.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_change
 
 from .const import DOMAIN
-from .diary import Book, nums, today
+from .diary import Book, canonical_hash, nums, rev, today
 from .library import dish_names, ingredient_lines, plain_name, read_dishes, read_week
 from .macros import complete, partial
 
@@ -128,6 +133,24 @@ class Planner:
                 changed += await self._slot(d, meal, str(day.get(meal) or "").strip(), dishes)
         return changed
 
+    def _slot_state(self, d: str, meal: str) -> str:
+        """A slot's inputs and what's in it, to tell whether either changed while the AI was asked: the planned meal and
+        its dish's ingredients as the sensors say now, the entries in that meal (with their revisions) and whether the
+        planned meal was taken off."""
+        name = next((str(x.get(meal) or "").strip() for x in read_week(self.hass, self.plan_sensor) if x.get("date") == d), "")
+        low = plain_name(name).lower()
+        dish = next((x for x in read_dishes(self.hass, self.dishes_sensor) if low and low in dish_names(x)), None)
+        diary = self.data.diary
+        return canonical_hash(
+            [
+                name,
+                dish and dish["id"],
+                ingredient_lines(dish),
+                sorted((e["id"], rev(e)) for e in diary.entries(d) if e.get("meal") == meal),
+                diary.data.get("dismissed", {}).get(f"{d}|{meal}"),
+            ]
+        )
+
     async def _slot(self, d: str, meal: str, name: str, dishes: list[dict[str, Any]]) -> int:
         diary = self.data.diary
         pkey = f"{d}|{meal}"
@@ -138,15 +161,19 @@ class Planner:
                 diary.delete(d, e["id"], dismiss=False)
             return len(gone)
         if same := [e for e in mine if e["name"].lower() == name.lower()]:
-            return sum([await self._refresh(d, e, name, dishes) for e in same])
+            return sum([await self._refresh(d, meal, e, name, dishes) for e in same])
         for e in mine:  # the plan changed to another meal
             diary.delete(d, e["id"], dismiss=False)
         if diary.dismissed(pkey, name):
             return len(mine)
         if any(e.get("meal") == meal and not e.get("plan_key") for e in diary.entries(d)):
             return len(mine)  # this meal is already logged by hand
+        before = self._slot_state(d, meal)
         found = await self._nutrition(name, dishes)
         if not found:
+            return len(mine)
+        if self._slot_state(d, meal) != before:
+            _LOGGER.debug("Not adding planned %s on %s: the slot changed while its numbers were worked out", meal, d)
             return len(mine)
         values, ref = found
         diary.add(
@@ -164,17 +191,22 @@ class Planner:
         )
         return len(mine) + 1
 
-    async def _refresh(self, d: str, e: dict[str, Any], name: str, dishes: list[dict[str, Any]]) -> int:
-        """A planned entry takes the book's current numbers (completed, or newly arrived); never one whose numbers were edited."""
+    async def _refresh(self, d: str, meal: str, e: dict[str, Any], name: str, dishes: list[dict[str, Any]]) -> int:
+        """A planned entry takes the book's current numbers (completed, or newly arrived); never one whose numbers were
+        edited, nor one that changed (or whose slot did) while the numbers were worked out."""
         if e.get("edited"):
             return 0
+        before = self._slot_state(d, meal)
         found = await self._nutrition(name, dishes)
         if not found:
+            return 0
+        if self._slot_state(d, meal) != before:
+            _LOGGER.debug("Not renumbering planned %s on %s: it changed while its numbers were worked out", meal, d)
             return 0
         values, ref = found
         if e.get("ref") == ref and nums(values) == nums(e.get("per_portion")):
             return 0
-        return int(self.data.diary.renumber(d, e["id"], values, ref, PLAN_NOTE) is not None)
+        return int(self.data.diary.renumber(d, e["id"], values, ref, PLAN_NOTE, expected_rev=rev(e)) is not None)
 
     async def _nutrition(self, name: str, dishes: list[dict[str, Any]]) -> Nutrition | None:
         """One portion: the book's numbers, else worked out from the dish's ingredients (kept), else from its name (kept)."""
@@ -198,7 +230,10 @@ class Planner:
                 if partial(known):
                     known = await self._completed(key, known, lambda: est.text(base))
                 return nums(known), ""
+            before = self.book.version(key)
             out = await est.text(base)
+            if self.book.version(key) != before and (known := self.book.get(key)) and known.get("kcal"):
+                return nums(known), ""  # numbers arrived while the AI worked: they win
             self.book.set(key, {**nums(out), "source": "ai"})
             return nums(out), ""
         except HomeAssistantError as err:
@@ -227,12 +262,16 @@ class Planner:
         self, key: str, known: dict[str, Any], estimate: Callable[[], Awaitable[dict[str, Any]]]
     ) -> dict[str, Any]:
         """The book's partial numbers for `key` made whole and kept (marked, so it's done once). An AI that doesn't
-        answer leaves them as they are, for the next try."""
+        answer leaves them as they are, for the next try; numbers that changed while it worked are left as they now are."""
+        before = self.book.version(key)
         try:
             est = await estimate()
         except HomeAssistantError as err:
             _LOGGER.debug("Couldn't complete the numbers for %s: %s", key, err)
             return known
+        if self.book.version(key) != before:
+            _LOGGER.debug("Not completing %s: its numbers changed while the AI worked", key)
+            return self.book.get(key) or known
         values = complete(known, est)
         return self.book.set(
             key,

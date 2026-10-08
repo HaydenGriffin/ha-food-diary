@@ -3,36 +3,25 @@
 Everything lives in Home Assistant's own storage (.storage/food_diary.<person>, .storage/food_diary.dishes and
 .storage/food_diary.products). A day is a list of entries; an entry keeps its numbers per portion and for what was eaten, so
 portions or grams can change later without asking the AI again.
-
-Every entry has a revision (`rev`, 1 when made, one more on every change), so an app can say which version it is changing
-(`expected_rev`) and background work can tell that an entry changed while it waited. A create that comes with a `client_id`
-(an id the app made for that one action) happens once: the diary keeps a ledger of them, with the entry each one made, that
-outlives the entry, so a retried or doubled request returns the first result instead of logging the food again.
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections import Counter
-from collections.abc import Awaitable, Callable
-import copy
+from collections.abc import Callable
 from datetime import date, timedelta
-import hashlib
-import json
 import logging
 from typing import Any
 import uuid
 
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DEFAULT_GOALS, DOMAIN, MEALS, NUM
 
-STORE_VERSION = 1  # rev, client_id and the client_id ledger are additions older versions load (and ignore) as they are
+STORE_VERSION = 1
 KEPT = ("estimate", "portions", "dismissed")  # a dish's book entry: kept through new numbers (see checks.py)
-NOT_COPIED = ("id", "at", "rev", "client_id", "plan_key", "edited")  # a copied entry is a new entry
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -64,30 +53,6 @@ def today() -> str:
     return dt_util.now().date().isoformat()
 
 
-def canonical_hash(value: Any) -> str:
-    """sha256 of the canonical JSON of `value` (sorted keys, no whitespace; dates as ISO text)."""
-    text = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(text.encode()).hexdigest()
-
-
-def payload_hash(request: dict[str, Any]) -> str:
-    """What a create request asked for, without its client_id: the same id with another payload is a mistake."""
-    return canonical_hash({k: v for k, v in request.items() if k != "client_id"})
-
-
-def rev(e: dict[str, Any]) -> int:
-    """An entry's revision (entries from before revisions count as 1)."""
-    return int(e.get("rev") or 1)
-
-
-def conflict() -> ServiceValidationError:
-    return ServiceValidationError(translation_domain=DOMAIN, translation_key="conflict")
-
-
-def client_id_reused() -> ServiceValidationError:
-    return ServiceValidationError(translation_domain=DOMAIN, translation_key="client_id_reused")
-
-
 def again(e: dict[str, Any]) -> dict[str, Any]:
     """What's needed to log an entry again as it was: its numbers per portion, or per 100 g with the grams."""
     out = {
@@ -112,7 +77,6 @@ class Diary:
         self.data: dict[str, Any] = {"goals": dict(DEFAULT_GOALS), "days": {}}
         self._listeners: list[Callable[[], None]] = []
         self._undo: list[dict[str, Any]] = []  # the last ten copies, for undo_copy (not kept over a restart)
-        self._creating: dict[str, tuple[asyncio.Lock, list[int]]] = {}  # client_id -> (its lock, how many wait on it)
 
     async def async_load(self) -> None:
         stored = await self.store.async_load()
@@ -121,10 +85,6 @@ class Diary:
             self.data["goals"] = {**DEFAULT_GOALS, **(stored.get("goals") or {})}
             self.data["dismissed"] = stored.get("dismissed") or {}
             self.data["saved"] = stored.get("saved") or []
-            self.data["client_ids"] = stored.get("client_ids") or {}
-        for entries in self.data["days"].values():
-            for e in entries:
-                e.setdefault("rev", 1)
 
     def dismissed(self, plan_key: str, name: str) -> bool:
         return self.data.get("dismissed", {}).get(plan_key) == name.lower()
@@ -163,9 +123,6 @@ class Diary:
 
     def entries(self, d: str) -> list[dict[str, Any]]:
         return self.data["days"].get(d, [])
-
-    def find(self, d: str, entry_id: str) -> dict[str, Any] | None:
-        return next((e for e in self.entries(d) if e["id"] == entry_id), None)
 
     def day(self, d: str) -> dict[str, Any]:
         entries = sorted(
@@ -312,63 +269,9 @@ class Diary:
                 return x
         return None
 
-    # ---------- doing a create once ----------
-
-    @property
-    def client_ids(self) -> dict[str, dict[str, Any]]:
-        """The ledger: client_id -> {entry_id, date, payload_hash, at} (a copy keeps `copy` instead of one entry). It is
-        never trimmed, and deleting an entry leaves its line, so a late retry can't bring a deleted entry back."""
-        return self.data.setdefault("client_ids", {})
-
-    async def create_once(
-        self, client_id: str | None, request: dict[str, Any], create: Callable[[], Awaitable[dict[str, Any]]]
-    ) -> tuple[dict[str, Any], bool]:
-        """Run `create` once per client_id. `create` makes the entries and returns what the ledger keeps about them
-        ({"entry_id", "date"}, or {"copy": …}). Returns that record and whether it is a repeat (nothing made this time).
-
-        Calls with the same id wait for each other, so two at once (a double tap, a retry while the first is still being
-        worked out) make one entry. The same id with a different request is refused (`client_id_reused`). Without a
-        client_id, `create` just runs."""
-        if not client_id:
-            return await create(), False
-        wanted = payload_hash(request)
-        lock, users = self._creating.setdefault(client_id, (asyncio.Lock(), [0]))
-        users[0] += 1
-        try:
-            async with lock:
-                if (done := self.client_ids.get(client_id)) is not None:
-                    if done.get("payload_hash") != wanted:
-                        raise client_id_reused()
-                    return done, True
-                record = {
-                    **await create(),
-                    "payload_hash": wanted,
-                    "at": dt_util.now().isoformat(timespec="seconds"),
-                }
-                self.client_ids[client_id] = record
-                self.async_changed()
-                return record, False
-        finally:
-            users[0] -= 1
-            if not users[0]:
-                self._creating.pop(client_id, None)
-
     # ---------- writing ----------
 
     def add(self, d: str, f: dict[str, Any]) -> dict[str, Any]:
-        entry = self._new_entry(f)
-        self._recount(entry)
-        return self._insert(d, entry)
-
-    def _insert(self, d: str, entry: dict[str, Any]) -> dict[str, Any]:
-        self.data["days"].setdefault(d, []).append(entry)
-        self.async_changed()
-        return entry
-
-    @staticmethod
-    def _new_entry(f: dict[str, Any]) -> dict[str, Any]:
-        """A new entry (rev 1) from a log request: label and barcode food is per_100 × grams, anything else its numbers for
-        one portion times the portions."""
         portions = num(f.get("portions")) or 1.0
         per_100 = nums(f["per_100"]) if isinstance(f.get("per_100"), dict) and num(f["per_100"].get("kcal")) else None
         grams = num(f.get("grams"))
@@ -379,7 +282,6 @@ class Diary:
             per_portion = nums(f.get("per_portion") or f)
         entry: dict[str, Any] = {
             "id": uuid.uuid4().hex[:10],
-            "rev": 1,
             "at": dt_util.now().isoformat(timespec="minutes"),
             "meal": f["meal"] if f.get("meal") in MEALS else meal_now(),
             "name": str(f.get("name") or "Something").strip()[:80],
@@ -397,25 +299,15 @@ class Diary:
             entry["image_url"] = str(f["image_url"])[:300]
         if f.get("edited"):
             entry["edited"] = True
-        if f.get("client_id"):
-            entry["client_id"] = str(f["client_id"])
+        self._recount(entry)
+        self.data["days"].setdefault(d, []).append(entry)
+        self.async_changed()
         return entry
 
-    @staticmethod
-    def _check_rev(e: dict[str, Any], expected_rev: int | None) -> None:
-        """An app that says which revision it is changing gets `conflict` when the entry has changed since."""
-        if expected_rev is not None and rev(e) != expected_rev:
-            raise conflict()
-
-    @staticmethod
-    def _changed_entry(e: dict[str, Any]) -> None:
-        e["rev"] = rev(e) + 1
-
-    def update(self, d: str, entry_id: str, f: dict[str, Any], expected_rev: int | None = None) -> dict[str, Any] | None:
+    def update(self, d: str, entry_id: str, f: dict[str, Any]) -> dict[str, Any] | None:
         for e in self.entries(d):
             if e["id"] != entry_id:
                 continue
-            self._check_rev(e, expected_rev)
             if num(f.get("grams")) and e.get("per_100"):
                 e["grams"] = round(num(f["grams"]), 1)
                 e["per_portion"] = {k: round(num(e["per_100"].get(k)) * e["grams"] / 100, 2) for k in NUM}
@@ -437,25 +329,19 @@ class Diary:
                 else:
                     e.pop("checked", None)
             self._recount(e)
-            self._changed_entry(e)
             self.async_changed()
             return e
         return None
 
-    def renumber(
-        self, d: str, entry_id: str, values: dict[str, Any], ref: str, note: str, expected_rev: int | None = None
-    ) -> dict[str, Any] | None:
-        """New numbers for one portion of a planned entry (from its recipe); its portions stay. With `expected_rev` (work
-        that waited on the AI), nothing changes when the entry changed meanwhile or its numbers are now the person's own:
-        a newer edit always wins."""
-        e = self.find(d, entry_id)
-        if e is None or (expected_rev is not None and (rev(e) != expected_rev or e.get("edited"))):
-            return None
-        e.update(per_portion=nums(values), ref=ref, note=note)
-        self._recount(e)
-        self._changed_entry(e)
-        self.async_changed()
-        return e
+    def renumber(self, d: str, entry_id: str, values: dict[str, Any], ref: str, note: str) -> dict[str, Any] | None:
+        """New numbers for one portion of a planned entry (from its recipe); its portions stay."""
+        for e in self.entries(d):
+            if e["id"] == entry_id:
+                e.update(per_portion=nums(values), ref=ref, note=note)
+                self._recount(e)
+                self.async_changed()
+                return e
+        return None
 
     def follow(self, ref: str, values: dict[str, Any], start: str) -> int:
         """A recipe's numbers changed: its entries from `start` on whose numbers weren't edited take them (portions stay)."""
@@ -465,18 +351,16 @@ class Diary:
                 if e.get("ref") == ref and not e.get("edited") and nums(e.get("per_portion")) != nums(values):
                     e["per_portion"] = nums(values)
                     self._recount(e)
-                    self._changed_entry(e)
                     changed += 1
         if changed:
             self.async_changed()
         return changed
 
-    def delete(self, d: str, entry_id: str, dismiss: bool = True, expected_rev: int | None = None) -> dict[str, Any] | None:
+    def delete(self, d: str, entry_id: str, dismiss: bool = True) -> dict[str, Any] | None:
         """Remove an entry. Removing one that came from the meal plan remembers it, so the plan doesn't put it back."""
         entries = self.entries(d)
         for e in entries:
             if e["id"] == entry_id:
-                self._check_rev(e, expected_rev)
                 if dismiss and e.get("plan_key"):
                     self.data.setdefault("dismissed", {})[e["plan_key"]] = e["name"].lower()
                 entries.remove(e)
@@ -486,14 +370,13 @@ class Diary:
                 return e
         return None
 
-    def set_photo(self, d: str, entry_id: str, photo: str, expected_rev: int | None = None) -> dict[str, Any] | None:
-        if (e := self.find(d, entry_id)) is None:
-            return None
-        self._check_rev(e, expected_rev)
-        e["photo"] = photo
-        self._changed_entry(e)
-        self.async_changed()
-        return e
+    def set_photo(self, d: str, entry_id: str, photo: str) -> dict[str, Any] | None:
+        for e in self.entries(d):
+            if e["id"] == entry_id:
+                e["photo"] = photo
+                self.async_changed()
+                return e
+        return None
 
     # ---------- copying days ----------
 
@@ -516,26 +399,17 @@ class Diary:
                     self.delete(d, e["id"])
                 if gone:
                     record["removed"][d] = gone
-            record["added"][d] = [self._insert(d, self._copied(e))["id"] for e in food]
+            added = []
+            for e in food:
+                c = {k: v for k, v in e.items() if k not in ("id", "at", "plan_key", "edited")}
+                if c.get("source") == "plan":
+                    c["source"] = "again"
+                    c.pop("note", None)
+                c["edited"] = e.get("edited", False)
+                added.append(self.add(d, {**c, "portions": e.get("portions") or 1, "per_portion": e.get("per_portion")})["id"])
+            record["added"][d] = added
         self._undo = [*self._undo[-9:], record]
         return record
-
-    def _copied(self, e: dict[str, Any]) -> dict[str, Any]:
-        """A new entry eaten exactly like `e`: the same portions, grams and numbers (typed ones too), kept as they are rather
-        than worked out again from a label or barcode's per_100. Planned food comes along as plain food."""
-        c = {k: v for k, v in e.items() if k not in NOT_COPIED}
-        if c.get("source") == "plan":
-            c["source"] = "again"
-            c.pop("note", None)
-        entry = self._new_entry({**c, "edited": e.get("edited", False)})
-        entry.update(
-            portions=num(e.get("portions")) or 1.0,
-            per_portion=nums(e.get("per_portion") or e),
-            **{k: round(num(e.get(k)), 1) for k in NUM},
-        )
-        if isinstance(e.get("per_100"), dict):
-            entry.update({k: copy.deepcopy(e[k]) for k in ("per_100", "grams", "unit") if k in e})
-        return entry
 
     def uncopy(self, token: str) -> bool:
         record = next((r for r in self._undo if r["token"] == token), None)
@@ -576,12 +450,6 @@ class Book:
 
     def get(self, key: str) -> dict[str, Any] | None:
         return self.items.get(key)
-
-    def version(self, key: str) -> str:
-        """`key`'s numbers as they are now (and where they came from): work that asks the AI first notes this, and keeps
-        its answer only when it is still the same afterwards, so numbers typed meanwhile are never overwritten."""
-        item = self.items.get(key) or {}
-        return canonical_hash([nums(item), item.get("source"), item.get("completed")])
 
     @callback
     def set(self, key: str, value: dict[str, Any]) -> dict[str, Any]:

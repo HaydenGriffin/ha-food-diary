@@ -1,5 +1,6 @@
 """Today's numbers per person: calories, protein, carbs, fat and fibre eaten (with long-term statistics, so history graphs
-and averages work), calories left against the goal, and when something was last logged."""
+and averages work), calories left against the goal, and when something was last logged. Each carries `api` (see
+const.API_VERSION), so apps can tell what the diary's services support."""
 
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import FoodDiaryConfigEntry, FoodDiaryData
-from .const import DOMAIN, MEALS
+from .const import API_VERSION, DOMAIN, MEALS
 from .diary import today
 
 
@@ -133,6 +134,9 @@ class DiarySensor(_DiaryEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
+        return {**self._attributes(), "api": API_VERSION}
+
+    def _attributes(self) -> dict[str, Any]:
         d = self._today
         key = self.entity_description.key
         if key == "calories_today":
@@ -173,4 +177,5 @@ class LastLoggedSensor(_DiaryEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         e = self._last()
-        return {"name": e["name"], "kcal": e["kcal"], "meal": e["meal"]} if e else None
+        last = {"name": e["name"], "kcal": e["kcal"], "meal": e["meal"], "entry_id": e["id"], "rev": e.get("rev", 1)} if e else {}
+        return {**last, "api": API_VERSION}

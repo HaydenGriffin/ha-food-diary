@@ -1,8 +1,11 @@
-"""Fixtures: two people, a fake AI (answers by task name), a notify service that records, Open Food Facts mocked."""
+"""Fixtures: two people, a fake AI (answers by task name; or held until the test lets it answer), a notify service that
+records, Open Food Facts mocked."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, Generator
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -76,6 +79,22 @@ def ai_calls() -> Generator[list[dict[str, Any]]]:
 
     with patch("custom_components.food_diary.estimate.Estimator._ai", fake_ai):
         yield calls
+
+
+@pytest.fixture
+def held_ai(ai_calls):
+    """An AI that answers only once the test opens the gate (to have work in flight while something else happens)."""
+    held = SimpleNamespace(gate=asyncio.Event(), asked=asyncio.Event(), answers=dict(AI_ANSWERS))
+
+    async def slow_ai(self, task, instructions, structure, attachments=None):
+        ai_calls.append({"task": task, "instructions": instructions, "attachments": attachments})
+        held.asked.set()
+        await held.gate.wait()
+        return dict(held.answers[task])
+
+    with patch("custom_components.food_diary.estimate.Estimator._ai", slow_ai):
+        yield held
+        held.gate.set()  # a test that failed before opening it leaves nothing waiting
 
 
 @pytest.fixture

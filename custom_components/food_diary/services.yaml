@@ -116,6 +116,9 @@ log_food:
     image_url:
       selector:
         text: {}
+    client_id:
+      selector:
+        text: {}
 update_food:
   fields:
     person:
@@ -198,6 +201,12 @@ update_food:
     checked:
       selector:
         boolean: {}
+    expected_rev:
+      selector:
+        number:
+          min: 1
+          max: 1000000
+          mode: box
 delete_food:
   fields:
     person:
@@ -211,6 +220,12 @@ delete_food:
     date:
       selector:
         date: {}
+    expected_rev:
+      selector:
+        number:
+          min: 1
+          max: 1000000
+          mode: box
 get_day:
   fields:
     person:
@@ -510,6 +525,12 @@ set_photo:
       selector:
         text:
           multiline: true
+    expected_rev:
+      selector:
+        number:
+          min: 1
+          max: 1000000
+          mode: box
 copy_day:
   fields:
     person:
@@ -532,6 +553,9 @@ copy_day:
       default: false
       selector:
         boolean: {}
+    client_id:
+      selector:
+        text: {}
 undo_copy:
   fields:
     person:

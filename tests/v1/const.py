@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 DOMAIN = "food_diary"
-# The service contract the diary sensors advertise (attribute `api`). 2: creates take `client_id` (done once), entries
-# carry `rev` and changes take `expected_rev`. Apps send client_id only to a diary that says 2 or more.
-API_VERSION = 2
 
 # Every entry, portion and goal carries these five numbers.
 NUM = ("kcal", "protein_g", "carbs_g", "fat_g", "fibre_g")
@@ -37,4 +34,4 @@ OFF_FIELDS = (
     "image_front_small_url,image_front_url,product_name,product_name_en,generic_name,brands,nutriments,"
     "serving_quantity,serving_size,product_quantity,product_quantity_unit,quantity"
 )
-OFF_USER_AGENT = "ha-food-diary/1.1 (+https://github.com/HaydenGriffin/ha-food-diary)"
+OFF_USER_AGENT = "ha-food-diary/1.0 (+https://github.com/HaydenGriffin/ha-food-diary)"

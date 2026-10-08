@@ -1,6 +1,6 @@
 [project]
 name = "ha-food-diary"
-version = "1.0.0"
+version = "1.1.0"
 description = "A calorie and macro diary for Home Assistant: photos, labels, barcodes, voice and meal plans."
 readme = "README.md"
 requires-python = ">=3.13"
