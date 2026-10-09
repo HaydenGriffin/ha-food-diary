@@ -656,6 +656,60 @@
           "description": "The recipe."
         }
       }
+    },
+    "snapshot": {
+      "name": "Snapshot before a change",
+      "description": "Keeps exact copies of what a change made with other actions may touch (an entry, a recipe's numbers and its entries from today on), so restore_snapshot can undo it exactly. The last ten, until a restart.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "token": {
+          "name": "Token",
+          "description": "A name for this snapshot (4–40 letters, digits, - or _), made by the caller."
+        },
+        "entry_id": {
+          "name": "Entry ID",
+          "description": "An entry the change may touch."
+        },
+        "date": {
+          "name": "Date",
+          "description": "The entry's day. Default: today."
+        },
+        "dish_id": {
+          "name": "Recipe ID",
+          "description": "A recipe whose numbers the change may set."
+        }
+      }
+    },
+    "restore_snapshot": {
+      "name": "Undo with a snapshot",
+      "description": "Puts back exactly what snapshot kept: the entries (with a new revision) and the recipe's numbers. Once per token.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "token": {
+          "name": "Token",
+          "description": "From snapshot."
+        }
+      }
+    },
+    "rename_source": {
+      "name": "Rename a source",
+      "description": "Gives every entry and recipe with one source another (for example food brought over from another app → import). Admin only.",
+      "fields": {
+        "from": {
+          "name": "From",
+          "description": "The source name in the stored data."
+        },
+        "to": {
+          "name": "To",
+          "description": "The source it becomes."
+        }
+      }
     }
   },
   "exceptions": {

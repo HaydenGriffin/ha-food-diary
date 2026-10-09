@@ -15,6 +15,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service import async_register_admin_service
 import voluptuous as vol
 
 from .const import DISH_SOURCES, DOMAIN, MEALS, NUM, SOURCES
@@ -144,9 +145,21 @@ CHECK_SCHEMA = vol.Schema(
     }
 )
 DISMISS_SCHEMA = vol.Schema({**BASE, vol.Required("dish_id"): cv.string})
+TOKEN = vol.All(cv.string, vol.Match(r"^[A-Za-z0-9_-]{4,40}$"))
+SNAPSHOT_SCHEMA = vol.Schema(
+    {**BASE, vol.Required("token"): TOKEN, vol.Optional("dish_id"): cv.string, vol.Optional("entry_id"): cv.string, DATE: cv.date}
+)
+RESTORE_SCHEMA = vol.Schema({**BASE, vol.Required("token"): TOKEN})
+RENAME_SCHEMA = vol.Schema(
+    {
+        vol.Required("from"): vol.All(cv.string, vol.Length(min=1, max=40)),
+        vol.Required("to"): vol.In(sorted({*SOURCES, *DISH_SOURCES})),
+    }
+)
 INTERNAL = ("estimate", "checked_for", "dismissed")  # the numbers check's own notes on a book entry
 
 NOT_IN_DIARY = "That entry isn't in the diary on that day."
+NOT_UNDOABLE = "That change can't be undone any more."  # apps may match this text: keep it
 
 
 def loaded(hass: HomeAssistant) -> list[ConfigEntry]:
@@ -423,6 +436,40 @@ def async_register_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError("That recipe isn't in the recipe book.")
         return {"ok": True}
 
+    async def snapshot(call: ServiceCall) -> ServiceResponse:
+        """Before a change made with other services (update_food, set_dish_nutrition): exact copies of the entry, the
+        recipe's entries from today on (its new numbers follow into them) and its book item, for restore_snapshot."""
+        data = resolve(hass, call)
+        entry_id, dish_id = call.data.get("entry_id"), call.data.get("dish_id")
+        entry = (day_of(call), entry_id) if entry_id else None
+        if entry and not any(e["id"] == entry_id for e in data.diary.entries(entry[0])):
+            raise ServiceValidationError(NOT_IN_DIARY)
+        book = dishes_book(hass)
+        r = data.diary.snapshot(call.data["token"], entry, dish_id, today(), book)
+        e = next((x for d, x in r["entries"] if entry and (d, x["id"]) == entry), None)
+        known = book.get(dish_id) if dish_id else None
+        kept = None
+        if e:
+            kept = {k: e.get(k) for k in ("id", "rev", "name", "meal", "portions", "ref", "source", "edited", *NUM)}
+            kept |= {"date": entry[0], "per_portion": nums(e.get("per_portion"))}
+        return {"token": r["token"], "entries": len(r["entries"]), "entry": kept, "dish": public(known) if known else None}
+
+    async def restore_snapshot(call: ServiceCall) -> ServiceResponse:
+        if (r := resolve(hass, call).diary.restore(call.data["token"], dishes_book(hass))) is None:
+            raise ServiceValidationError(NOT_UNDOABLE)
+        return {"ok": True, **r}
+
+    async def rename_source(call: ServiceCall) -> ServiceResponse:
+        """Every entry and recipe-book item with source `from` gets `to` (data brought over from elsewhere). Admin only."""
+        old, new = call.data["from"], call.data["to"]
+        entries = {e.runtime_data.person: e.runtime_data.diary.rename_source(old, new) for e in loaded(hass)}
+        recipes = dishes_book(hass).rename_source(old, new) if new in DISH_SOURCES else 0
+        return {"entries": entries, "recipes": recipes}
+
+    async_register_admin_service(
+        hass, DOMAIN, "rename_source", rename_source, schema=RENAME_SCHEMA, supports_response=SupportsResponse.OPTIONAL
+    )
+
     handlers: list[tuple[str, Callable[[ServiceCall], Awaitable[ServiceResponse]], vol.Schema, SupportsResponse]] = [
         ("log_food", log_food, LOG_SCHEMA, SupportsResponse.OPTIONAL),
         ("update_food", update_food, UPDATE_SCHEMA, SupportsResponse.OPTIONAL),
@@ -445,6 +492,8 @@ def async_register_services(hass: HomeAssistant) -> None:
         ("set_dish_nutrition", set_dish_nutrition, DISH_SET_SCHEMA, SupportsResponse.OPTIONAL),
         ("check_numbers", check_numbers, CHECK_SCHEMA, SupportsResponse.ONLY),
         ("dismiss_check", dismiss_check, DISMISS_SCHEMA, SupportsResponse.OPTIONAL),
+        ("snapshot", snapshot, SNAPSHOT_SCHEMA, SupportsResponse.OPTIONAL),
+        ("restore_snapshot", restore_snapshot, RESTORE_SCHEMA, SupportsResponse.OPTIONAL),
     ]
     for name, handler, schema, response in handlers:
         hass.services.async_register(DOMAIN, name, handler, schema=schema, supports_response=response)

@@ -10,10 +10,12 @@ API_VERSION = 2
 # Every entry, portion and goal carries these five numbers.
 NUM = ("kcal", "protein_g", "carbs_g", "fat_g", "fibre_g")
 MEALS = ("breakfast", "lunch", "dinner", "snack")
-# Where an entry's numbers came from. "plan" is only ever written by the meal planner.
-SOURCES = ("photo", "label", "barcode", "text", "dish", "manual", "again", "saved", "voice")
-# Where a recipe's per-portion numbers came from: typed by the person, printed on the recipe, or estimated.
-DISH_SOURCES = ("own", "recipe", "ai")
+# Where an entry's numbers came from. "plan" is only ever written by the meal planner; "import" is food brought over from
+# another app (its numbers are what the person logged there).
+SOURCES = ("photo", "label", "barcode", "text", "dish", "manual", "again", "saved", "voice", "import")
+# Where a recipe's per-portion numbers came from: typed by the person, printed on the recipe, estimated, or brought over
+# from another app where the person logged it.
+DISH_SOURCES = ("own", "recipe", "ai", "import")
 
 CONF_PERSON = "person"
 CONF_AI_TASK = "ai_task_entity"
@@ -38,4 +40,4 @@ OFF_FIELDS = (
     "image_front_small_url,image_front_url,product_name,product_name_en,generic_name,brands,nutriments,"
     "serving_quantity,serving_size,product_quantity,product_quantity_unit,quantity"
 )
-OFF_USER_AGENT = "ha-food-diary/1.2 (+https://github.com/HaydenGriffin/ha-food-diary)"
+OFF_USER_AGENT = "ha-food-diary/1.3 (+https://github.com/HaydenGriffin/ha-food-diary)"

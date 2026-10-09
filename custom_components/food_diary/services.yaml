@@ -81,6 +81,7 @@ log_food:
           - again
           - saved
           - voice
+          - import
     ref:
       selector:
         text: {}
@@ -427,6 +428,7 @@ set_dish_nutrition:
           - own
           - recipe
           - ai
+          - import
     portions:
       selector:
         number:
@@ -597,3 +599,47 @@ dismiss_check:
       required: true
       selector:
         text: {}
+snapshot:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    token:
+      required: true
+      selector:
+        text: {}
+    entry_id:
+      selector:
+        text: {}
+    date:
+      selector:
+        date: {}
+    dish_id:
+      selector:
+        text: {}
+restore_snapshot:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    token:
+      required: true
+      selector:
+        text: {}
+rename_source:
+  fields:
+    from:
+      required: true
+      example: oldapp
+      selector:
+        text: {}
+    to:
+      required: true
+      selector:
+        select:
+          options:
+            - import
+            - manual
+            - own

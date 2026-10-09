@@ -10,7 +10,8 @@ numbers and ingredients:
   doubt (`check` on the book entry) is the suggested numbers for one portion, the portions they assume and a short reason.
   When another number of portions explains the calories, that's the suggestion ("may serve 2"); when it explains all of
   them, the numbers are right for it and there's no doubt.
-The person's own numbers ("own") are never doubted, nor numbers confirmed as right (`dismissed`, until they change). Every
+The person's own numbers ("own", or "import": logged in another app) are never doubted,
+nor numbers confirmed as right (`dismissed`, until they change). Every
 check is remembered (`checked_for`), so each dish is only looked at again when its numbers, ingredients or portions change.
 """
 
@@ -42,7 +43,7 @@ KCAL_OFF = 0.30  # calories this far off the suggestion: in doubt
 PROTEIN_OFF, PROTEIN_G = 0.40, 10  # protein this far off, and by more than this many grams
 FITS = 0.25  # another number of portions "explains" the calories within this
 MAX_PORTIONS = 8
-TRUSTED = ("own",)
+TRUSTED = ("own", "import")  # the person's own numbers, typed here or logged in another app
 RULES = 2  # bump when the rules change: every dish is checked again (from its kept sum)
 AI_GAP = 3.0  # seconds between AI asks in a scan
 AI_TIMEOUT = 20

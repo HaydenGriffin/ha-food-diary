@@ -161,7 +161,8 @@ Entries returned by `get_day`, `get_recent` and `set_photo` also carry `image`. 
 
 `get_day` entries also carry `check` when their recipe's numbers [look wrong](#recipe-numbers-check).
 
-Each entry's `source` is one of `photo`, `label`, `barcode`, `text`, `dish`, `manual`, `again`, `saved` or `voice`.
+Each entry's `source` is one of `photo`, `label`, `barcode`, `text`, `dish`, `manual`, `again`, `saved`, `voice` or
+`import` (food brought over from another app).
 `plan` is set only by the planner.
 
 ### Logging and changing
@@ -359,6 +360,36 @@ Undoes one of the last ten copies. Undo history is lost on restart. Fields: `per
 
 **Response:** `{"ok": true}`.
 
+### Undoing a change made with other services
+
+A change that takes several services (say, new numbers for a recipe, which its entries then follow, plus an edit of
+one entry) can be undone exactly: take a snapshot first, then restore it.
+
+#### `food_diary.snapshot` (response: optional)
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `token` | string | Required. 4–40 of `A-Z a-z 0-9 _ -`, made by the caller. The same token again replaces its snapshot. |
+| `entry_id`, `date` | string, date | Optional. An entry the change may touch (`date` defaults to today). |
+| `dish_id` | string | Optional. A recipe whose numbers the change may set: its book item and its entries from today on are kept. |
+
+Response: `{"token", "entries": <count kept>, "entry": {id, rev, name, meal, portions, ref, source, edited, kcal…,
+date, per_portion} | null, "dish": <book item> | null}`. The last ten snapshots are kept, until a restart.
+
+#### `food_diary.restore_snapshot` (response: optional)
+
+`{token}` puts back exactly what was kept: each entry in its place (or at the end of its day if it was deleted since),
+with a new `rev`, and the recipe's book item (or no item, if it had none). Response: `{"ok": true, "entries": n,
+"book": bool}`. Once per token; an unknown or used token raises "That change can't be undone any more."
+
+### Data brought over from elsewhere
+
+#### `food_diary.rename_source` (admin only, response: optional)
+
+`{from, to}` gives every entry (in every diary) and every recipe-book item whose `source` is `from` the source `to`, for
+example after importing another app's history under its own name: `{"from": "otherapp", "to": "import"}`. Response:
+`{"entries": {<person>: n}, "recipes": n}`. Running it again changes nothing.
+
 ### Estimating
 
 #### `food_diary.estimate` (response: only)
@@ -402,7 +433,7 @@ A label photo that shows a barcode teaches the product book, so the next scan of
 If a barcode is in neither the product book nor Open Food Facts, the call fails with "That product isn't in Open Food
 Facts yet…". The webhook reports this case as `need_label`.
 
-`dish` answers are kept per `dish_id`. `nutrition_source` is `own`, `recipe` or `ai`.
+`dish` answers are kept per `dish_id`. `nutrition_source` is `own`, `recipe`, `ai` or `import`.
 
 ### Recipes
 
@@ -440,7 +471,7 @@ Sets a dish's numbers for one portion.
 | `dish_id` | string | **Required.** |
 | `kcal` | number | **Required.** |
 | `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | |
-| `source` | `own`, `recipe` or `ai` | Default `own`. `own` numbers are never doubted. |
+| `source` | `own`, `recipe`, `ai` or `import` | Default `own`. `own` and `import` numbers are never doubted. |
 | `portions` | integer | 1 to 24. How many portions the recipe makes. |
 
 Setting new numbers clears any doubt about the dish. Entries for this dish from today onwards take the new numbers, in

@@ -112,6 +112,7 @@ class Diary:
         self.data: dict[str, Any] = {"goals": dict(DEFAULT_GOALS), "days": {}}
         self._listeners: list[Callable[[], None]] = []
         self._undo: list[dict[str, Any]] = []  # the last ten copies, for undo_copy (not kept over a restart)
+        self._snapshots: list[dict[str, Any]] = []  # the last ten snapshots, for restore_snapshot (not kept either)
         self._creating: dict[str, tuple[asyncio.Lock, list[int]]] = {}  # client_id -> (its lock, how many wait on it)
 
     async def async_load(self) -> None:
@@ -551,6 +552,64 @@ class Diary:
         self.async_changed()
         return True
 
+    # ---------- an exact Undo for a change made with other services ----------
+
+    def snapshot(
+        self, token: str, entry: tuple[str, str] | None, ref: str | None, start: str, book: Book | None
+    ) -> dict[str, Any]:
+        """Exact copies of what a change may touch, so `restore` can put it back as it was: one entry (date, id), every
+        entry from `start` on with ref `ref` (a recipe's new numbers follow into them), and the recipe's book item. The
+        last ten, until a restart; the same token again replaces its snapshot. Returns the record (deep copies)."""
+        picked: dict[tuple[str, str], dict[str, Any]] = {}
+        if entry:
+            e = next((x for x in self.entries(entry[0]) if x["id"] == entry[1]), None)
+            if e is not None:
+                picked[(entry[0], e["id"])] = copy.deepcopy(e)
+        if ref:
+            for d in sorted(x for x in self.data["days"] if x >= start):
+                for e in self.entries(d):
+                    if e.get("ref") == ref:
+                        picked[(d, e["id"])] = copy.deepcopy(e)
+        record: dict[str, Any] = {"token": token, "entries": [(d, e) for (d, _), e in picked.items()]}
+        if ref and book is not None:
+            record["book"] = (ref, copy.deepcopy(book.get(ref)))
+        self._snapshots = [*[r for r in self._snapshots if r["token"] != token][-9:], record]
+        return record
+
+    def restore(self, token: str, book: Book | None) -> dict[str, Any] | None:
+        """Puts back what `snapshot` kept, exactly: each entry in its place (at the end of its day if it was removed
+        since) with a new revision (putting it back is a change too), and the book item (or no item, when there was
+        none). One use per token; None when the token is unknown or used."""
+        record = next((r for r in self._snapshots if r["token"] == token), None)
+        if record is None:
+            return None
+        for d, kept in record["entries"]:
+            entries = self.data["days"].setdefault(d, [])
+            i = next((n for n, x in enumerate(entries) if x["id"] == kept["id"]), None)
+            back = copy.deepcopy(kept)
+            back["rev"] = max(rev(kept), rev(entries[i]) if i is not None else 0) + 1
+            if i is None:
+                entries.append(back)
+            else:
+                entries[i] = back
+        if "book" in record and book is not None:
+            book.put(record["book"][0], copy.deepcopy(record["book"][1]))
+        self._snapshots.remove(record)
+        self.async_changed()
+        return {"entries": len(record["entries"]), "book": "book" in record}
+
+    def rename_source(self, old: str, new: str) -> int:
+        """Every entry whose source is `old` gets `new` (data brought over from another app or an older setup)."""
+        n = 0
+        for entries in self.data["days"].values():
+            for e in entries:
+                if e.get("source") == old:
+                    e["source"] = new
+                    n += 1
+        if n:
+            self.async_changed()
+        return n
+
     def set_goals(self, f: dict[str, Any]) -> dict[str, Any]:
         for k in NUM:
             if k in f and f[k] is not None:
@@ -592,6 +651,25 @@ class Book:
         self.items[key] = {**kept, **value, "at": dt_util.now().isoformat(timespec="minutes")}
         self.store.async_delay_save(lambda: self.items, 1)
         return self.items[key]
+
+    @callback
+    def put(self, key: str, item: dict[str, Any] | None) -> None:
+        """`key` exactly as `item` (None: no item), for an exact Undo."""
+        if item is None:
+            self.items.pop(key, None)
+        else:
+            self.items[key] = item
+        self.store.async_delay_save(lambda: self.items, 1)
+
+    @callback
+    def rename_source(self, old: str, new: str) -> int:
+        """Every item whose source is `old` gets `new`."""
+        hits = [x for x in self.items.values() if x.get("source") == old]
+        for x in hits:
+            x["source"] = new
+        if hits:
+            self.store.async_delay_save(lambda: self.items, 1)
+        return len(hits)
 
     @callback
     def patch(self, key: str, changes: dict[str, Any]) -> dict[str, Any]:

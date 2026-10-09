@@ -172,7 +172,10 @@ class LastLoggedSensor(_DiaryEntity):
     @property
     def native_value(self) -> datetime | None:
         e = self._last()
-        return dt_util.parse_datetime(e["at"]) if e and e.get("at") else None
+        at = dt_util.parse_datetime(e["at"]) if e and e.get("at") else None
+        if at is not None and at.tzinfo is None:  # stored without an offset (older or imported data): local time
+            at = at.replace(tzinfo=dt_util.get_default_time_zone())
+        return at
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
