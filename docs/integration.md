@@ -5,8 +5,8 @@ food from a meal photo, a nutrition label, a barcode (via Open Food Facts), a sh
 sensors, goal numbers, services, a webhook for phone shortcuts and voice intents. Optionally, it can read a meal plan so
 planned meals count ahead of time.
 
-This page covers setup, the entities, every service with its fields and response, the webhook, voice, and the two optional
-sensor contracts.
+This page covers setup, the entities, every service with its fields and response, the webhook, voice, the two optional
+sensor contracts, and how another integration can provide the recipes and the plan instead.
 
 - [Installation](#installation)
 - [Configuration](#configuration)
@@ -18,6 +18,7 @@ sensor contracts.
 - [Voice (optional)](#voice-optional)
 - [Meal plan sensor contract](#meal-plan-sensor-contract)
 - [Dish library sensor contract](#dish-library-sensor-contract)
+- [Recipes and plan from another integration](#recipes-and-plan-from-another-integration)
 - [Recipe numbers check](#recipe-numbers-check)
 - [Storage and privacy](#storage-and-privacy)
 
@@ -49,13 +50,14 @@ Every other field is optional. You can set them during setup and change them lat
 | Page to open from notifications | `open_path` | A dashboard path, such as `/lovelace/food`. Adds a **Change** button that opens `<path>#food-<entry id>`. |
 | Meal plan sensor | `meal_plan_sensor` | Turns on the [meal planner](#meal-plan-sensor-contract). |
 | Dish library sensor | `dishes_sensor` | Gives planned meals their recipes' numbers, fills `get_dishes`, and turns on the [recipe numbers check](#recipe-numbers-check). |
+| Recipes and meal plan from | `source` | Shown once another integration [offers its own](#recipes-and-plan-from-another-integration). When set, it replaces both sensors. |
 
 The **Configure** dialog also shows the diary's webhook address. Keep it private.
 
 If the home's country is set (**Settings → System → General**), the AI prompts mention it, so portion sizes follow local
 habits.
 
-When neither sensor is set, the planner and the background check don't run. In that state `sync_plan` returns
+When neither sensor (nor a source) is set, the planner and the background check don't run. In that state `sync_plan` returns
 `{"changed": 0, "completed": []}` and `get_dishes` returns `{"dishes": []}`. `check_numbers` still works for diary entries,
 by comparing them with a normal portion of the same name.
 
@@ -567,7 +569,17 @@ week:
     dinner: "Chicken katsu curry"
   - date: "2026-10-09"
     dinner: ""                    # empty or missing: nothing planned
+  - date: "2026-10-10"
+    dinner:                       # or an object, when the plan knows more
+      name: "Sweet potato traybake"   # required
+      dish_id: "tray-2"           # optional: the dish library recipe it is (beats matching by name)
+      note: "Batch cook"          # optional
+      nutrition: {kcal: 593, protein_g: 12.8, carbs_g: 65.9, fat_g: 33.4, fibre_g: 14.5}  # optional: ONE portion
+      ref: "tray-2"               # optional: the entry's ref for those numbers (default: dish_id)
 ```
+
+A sensor that doesn't exist, or whose state is `unavailable`, means the plan isn't available: nothing is added or removed
+until it is back.
 
 How the plan is applied:
 
@@ -576,12 +588,15 @@ How the plan is applied:
   `source: plan`, `plan_key: "<date>|<meal>"` and `note: "From the meal plan"`.
 - **Leftovers:** a `Leftovers:` prefix is ignored when matching a meal to a dish, so leftovers count as the same dish.
 - **Where the numbers come from**, first match wins:
-  1. the recipe book (`set_dish_nutrition`, or earlier estimates);
-  2. the dish's own `nutrition` from the dish library;
-  3. an AI estimate from the library dish's ingredients;
-  4. an AI estimate from the meal's name.
+  1. the plan's own `nutrition` for that meal (its `ref`, else its `dish_id`, becomes the entry's ref);
+  2. the recipe book (`set_dish_nutrition`, or earlier estimates);
+  3. the dish's own `nutrition` from the dish library;
+  4. an AI estimate from the library dish's ingredients;
+  5. an AI estimate from the meal's name.
 
-  Matching is by name, case-insensitively, against a dish's `name` or `name_en`. Estimates are kept, so each one is only
+  The dish is the one with the slot's `dish_id` when the library has it, else a match by name, case-insensitively,
+  against a dish's `name`, `name_en` or `aliases`. A slot's `nutrition` with a `dish_id` (and no other `ref`) is also kept
+  in the recipe book as that recipe's `recipe` numbers, unless the library gives numbers for it or the book has `own` ones. Estimates are kept, so each one is only
   asked once.
 - **Plan changes:** if a slot's meal changes, its entry is replaced. If the slot empties, the entry is removed, unless its
   numbers were edited.
@@ -599,6 +614,7 @@ dishes:
   - id: "chilli-1"                 # required, unique, stable; used as the entry's ref and the recipe book key
     name: "Chilli con carne"       # the name used on the meal plan
     name_en: "Chilli con carne"    # optional English name (also matched against the plan)
+    aliases: ["Chili"]             # optional other names the plan may use
     lang: "en"                     # optional language of `name`; non-English + name_en → title "name (name_en)"
     servings: 4                    # optional: how many portions the ingredients make
     amounts_per: "recipe"          # optional: "recipe" (default) or "portion"
@@ -617,14 +633,58 @@ dishes:
     added: "2026-09-30"
 ```
 
+A sensor that doesn't exist, or whose state is `unavailable`, means the library isn't available: the planner waits for it
+rather than estimating meals by name.
+
 **Recipe numbers.** A dish's `nutrition` is stored in the recipe book as `recipe` numbers, unless the book already has
 `own` numbers for that dish. Partial numbers are completed once: for example, a recipe that prints only kcal and protein.
 The missing macros are filled from an estimate of the same dish, scaled so `4·protein + 4·carbs + 9·fat` matches the
 printed calories.
 
+## Recipes and plan from another integration
+
+The planner, the numbers check, `get_dishes` and entry pictures read the recipes and the plan through two small providers
+(`custom_components/food_diary/sources.py`). The sensors above are the default ones. Another integration (a recipe manager,
+a household integration) can offer its own:
+
+```python
+from custom_components.food_diary.sources import async_register_source
+
+
+class Library:
+    def dishes(self) -> list[dict] | None:  # the dish library contract's items; None while it isn't available
+        ...
+
+    def async_subscribe(self, on_change) -> Callable[[], None]:  # call on_change() after a change; return "stop"
+        ...
+
+
+class Plan:
+    def days(self) -> list[dict] | None:  # [{date, breakfast?, lunch?, dinner?}], slots as in the meal plan contract
+        ...
+
+    def async_subscribe(self, on_change) -> Callable[[], None]:
+        ...
+
+
+unregister = async_register_source(hass, "my_recipes", library=Library(), plan=Plan())  # either one may be left out
+```
+
+- **Choosing it:** a diary reads from the source when its option **Recipes and meal plan from** (`source`) is that name.
+  The option appears once a source is registered. The sensor options are then ignored.
+- **Start order doesn't matter:** a diary set to a source that isn't registered yet runs without a plan or library, and
+  reloads when the source registers (and again if it's withdrawn).
+- **Reads are synchronous** and should be cheap: keep the last data you fetched and call `on_change()` when it changes.
+- **Unavailable is not empty:** return `None` while your data can't be read. The planner then changes nothing, instead of
+  removing planned entries or estimating meals by name.
+- **Unknown meals:** a meal left out of a day is "not known" (a list that couldn't be read, say), and that slot is left as
+  it is. `None` or `""` means nothing is planned.
+- The food diary doesn't depend on your integration; yours depends on `food_diary` (add it to `dependencies` in your
+  manifest).
+
 ## Recipe numbers check
 
-When a dish library is set, each recipe with both numbers and ingredients is checked in the background:
+When a dish library is set (a sensor or a source), each recipe with both numbers and ingredients is checked in the background:
 
 - **When it runs:** about 90 seconds after start, then a minute after the plan or the library changes.
 - **What it asks:** the AI adds up the whole recipe once. The result is cached until the ingredients change.

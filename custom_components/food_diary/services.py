@@ -19,9 +19,9 @@ import voluptuous as vol
 
 from .const import DISH_SOURCES, DOMAIN, MEALS, NUM, SOURCES
 from .diary import Book, Diary, num, nums, today
-from .library import read_dishes
 from .notifications import fire_logged
 from .photos import with_images
+from .sources import read_dishes
 
 if TYPE_CHECKING:
     from . import FoodDiaryData
@@ -333,7 +333,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         data = resolve(hass, call)
         book = dishes_book(hass)
         out = []
-        for x in read_dishes(hass, data.dishes_sensor):
+        for x in read_dishes(data.recipes) or []:
             n = book.get(x["id"]) or {}
             name, en = str(x.get("name") or "").strip(), str(x.get("name_en") or "").strip()
             # a dish named in another language keeps that name on the plan and shows both: "Owsianka (Porridge)"

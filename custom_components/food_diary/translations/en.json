@@ -10,7 +10,8 @@
           "notify_service": "Notify service",
           "open_path": "Page to open from notifications",
           "meal_plan_sensor": "Meal plan sensor",
-          "dishes_sensor": "Dish library sensor"
+          "dishes_sensor": "Dish library sensor",
+          "source": "Recipes and meal plan from"
         },
         "data_description": {
           "person": "Whose diary this is. Each person can have one diary.",
@@ -18,7 +19,8 @@
           "notify_service": "Gets a notification such as “Logged: Porridge · 215 kcal · 1,030 left today”, with Undo, when food is logged by voice or through the webhook.",
           "open_path": "A dashboard path such as /lovelace/food. The notification's Change button opens it.",
           "meal_plan_sensor": "Optional. A sensor whose `week` attribute lists planned meals; they count in the diary ahead of time. See the docs for the attribute format.",
-          "dishes_sensor": "Optional. A sensor whose `dishes` attribute lists recipes; it gives planned meals their numbers and turns on the recipe numbers check. See the docs for the attribute format."
+          "dishes_sensor": "Optional. A sensor whose `dishes` attribute lists recipes; it gives planned meals their numbers and turns on the recipe numbers check. See the docs for the attribute format.",
+          "source": "Optional. Another integration that offers its recipes and meal plan. When set, it is used instead of the two sensors."
         }
       }
     },
@@ -36,14 +38,16 @@
           "notify_service": "Notify service",
           "open_path": "Page to open from notifications",
           "meal_plan_sensor": "Meal plan sensor",
-          "dishes_sensor": "Dish library sensor"
+          "dishes_sensor": "Dish library sensor",
+          "source": "Recipes and meal plan from"
         },
         "data_description": {
           "ai_task_entity": "Reads meal photos, labels and descriptions. Leave empty to use your default AI Task entity.",
           "notify_service": "Gets a notification such as “Logged: Porridge · 215 kcal · 1,030 left today”, with Undo, when food is logged by voice or through the webhook.",
           "open_path": "A dashboard path such as /lovelace/food. The notification's Change button opens it.",
           "meal_plan_sensor": "Optional. A sensor whose `week` attribute lists planned meals; they count in the diary ahead of time. See the docs for the attribute format.",
-          "dishes_sensor": "Optional. A sensor whose `dishes` attribute lists recipes; it gives planned meals their numbers and turns on the recipe numbers check. See the docs for the attribute format."
+          "dishes_sensor": "Optional. A sensor whose `dishes` attribute lists recipes; it gives planned meals their numbers and turns on the recipe numbers check. See the docs for the attribute format.",
+          "source": "Optional. Another integration that offers its recipes and meal plan. When set, it is used instead of the two sensors."
         }
       }
     }

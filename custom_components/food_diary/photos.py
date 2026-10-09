@@ -18,7 +18,8 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, PHOTO_DIR
 from .estimate import decode_image
-from .library import dish_names, plain_name, read_dishes
+from .library import dish_names, plain_name
+from .sources import read_dishes
 
 if TYPE_CHECKING:
     from . import FoodDiaryData
@@ -90,7 +91,7 @@ class PhotoView(HomeAssistantView):
 def with_images(hass: HomeAssistant, data: FoodDiaryData, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Each entry (or food to log again) with an `image`: its own photo, the product's, else its recipe's (by id, then by
     name)."""
-    dishes = [x for x in read_dishes(hass, data.dishes_sensor) if x.get("image")]
+    dishes = [x for x in read_dishes(data.recipes) or [] if x.get("image")]
     by_id = {x["id"]: x["image"] for x in dishes}
     by_name: dict[str, str] = {}
     for x in dishes:

@@ -23,7 +23,7 @@ and no data of its own.
 | [`custom_components/food_diary`](custom_components/food_diary) | The Home Assistant integration: the diary, goals, sensors, 21 services, a webhook and voice intents. Installable through HACS. |
 | [`ios/`](ios) | **Food**, the SwiftUI iPhone app, with widgets, Control Center controls, a share extension and two-way Apple Health sync. |
 | [`custom_sentences/`](custom_sentences) | Optional Assist sentences: "log two eggs on toast for breakfast", "how many calories have I got left?" |
-| [`docs/integration.md`](docs/integration.md) | The full reference: options, entities, every service with its fields and responses, and the sensor contracts. |
+| [`docs/integration.md`](docs/integration.md) | The full reference: options, entities, every service with its fields and responses, and the sensor contracts, and the interface for another integration to provide recipes and a meal plan. |
 
 ## The app
 

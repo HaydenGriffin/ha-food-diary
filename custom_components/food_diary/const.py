@@ -22,6 +22,7 @@ CONF_OPEN_PATH = "open_path"
 CONF_WEBHOOK_ID = "webhook_id"
 CONF_PLAN_SENSOR = "meal_plan_sensor"  # see docs/integration.md, "Meal plan sensor contract"
 CONF_DISHES_SENSOR = "dishes_sensor"  # see docs/integration.md, "Dish library sensor contract"
+CONF_SOURCE = "source"  # another integration's recipes and plan instead of the sensors (sources.py)
 
 DEFAULT_GOALS = {"kcal": 2000.0, "protein_g": 100.0, "carbs_g": 230.0, "fat_g": 70.0, "fibre_g": 30.0}
 
@@ -37,4 +38,4 @@ OFF_FIELDS = (
     "image_front_small_url,image_front_url,product_name,product_name_en,generic_name,brands,nutriments,"
     "serving_quantity,serving_size,product_quantity,product_quantity_unit,quantity"
 )
-OFF_USER_AGENT = "ha-food-diary/1.1 (+https://github.com/HaydenGriffin/ha-food-diary)"
+OFF_USER_AGENT = "ha-food-diary/1.2 (+https://github.com/HaydenGriffin/ha-food-diary)"

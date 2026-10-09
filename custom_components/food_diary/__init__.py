@@ -2,8 +2,9 @@
 
 Food is logged from a meal photo, a nutrition label, a barcode (Open Food Facts), words or a recipe. Each person gets sensors
 for today (with long-term statistics), goal numbers, services for apps, dashboards and automations, a webhook for phone
-shortcuts, and voice intents. An optional meal plan sensor counts planned meals ahead of time, and an optional dish library
-sensor gives recipes their numbers and flags recipe numbers that look wrong.
+shortcuts, and voice intents. An optional meal plan counts planned meals ahead of time, and an optional dish library gives
+recipes their numbers and flags recipe numbers that look wrong; both are read from sensors, or from another integration that
+registers them (sources.py).
 """
 
 from __future__ import annotations
@@ -22,11 +23,9 @@ from homeassistant.helpers.typing import ConfigType
 from .checks import Checker
 from .const import (
     CONF_AI_TASK,
-    CONF_DISHES_SENSOR,
     CONF_NOTIFY,
     CONF_OPEN_PATH,
     CONF_PERSON,
-    CONF_PLAN_SENSOR,
     CONF_WEBHOOK_ID,
     DOMAIN,
     UNDO_PREFIX,
@@ -38,6 +37,7 @@ from .photos import Photos, PhotoView
 from .planner import Planner
 from .services import async_register_services
 from .shortcut import async_handle_webhook
+from .sources import MealPlan, RecipeLibrary, async_resolve
 
 PLATFORMS = [Platform.NUMBER, Platform.SENSOR]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -54,7 +54,8 @@ class FoodDiaryData:
     checker: Checker
     notify: str | None
     open_path: str | None
-    dishes_sensor: str | None
+    recipes: RecipeLibrary | None
+    plan: MealPlan | None
     planner: Planner | None = None
 
 
@@ -89,18 +90,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: FoodDiaryConfigEntry) ->
     await diary.async_load()
     books = hass.data[DOMAIN]
     options = entry.options
-    plan_sensor = options.get(CONF_PLAN_SENSOR) or None
-    dishes_sensor = options.get(CONF_DISHES_SENSOR) or None
+    source = async_resolve(hass, dict(options))
     estimator = Estimator(hass, options.get(CONF_AI_TASK) or None, name, books["dishes"], books["products"])
     data = FoodDiaryData(
         person=person,
         name=name,
         diary=diary,
         estimator=estimator,
-        checker=Checker(hass, estimator, dishes_sensor, plan_sensor),
+        checker=Checker(hass, estimator, source.library, source.plan),
         notify=options.get(CONF_NOTIFY) or None,
         open_path=options.get(CONF_OPEN_PATH) or None,
-        dishes_sensor=dishes_sensor,
+        recipes=source.library,
+        plan=source.plan,
     )
     entry.runtime_data = data
 
@@ -130,11 +131,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: FoodDiaryConfigEntry) ->
             await notify_removed(hass, data, removed)
 
     entry.async_on_unload(hass.bus.async_listen("mobile_app_notification_action", undo))
-    if plan_sensor:
-        data.planner = Planner(hass, data, plan_sensor, dishes_sensor)
+    if source.plan:
+        data.planner = Planner(hass, data, source.plan, source.library)
         for stop in data.planner.async_start():
             entry.async_on_unload(stop)
-    if dishes_sensor:
+    if source.library:
         for stop in data.checker.async_start():
             entry.async_on_unload(stop)
     entry.async_on_unload(entry.add_update_listener(_async_reload))

@@ -13,6 +13,7 @@ import pytest
 from custom_components.food_diary.checks import doubt, fitting_portions, numbers_key, off, reason
 from custom_components.food_diary.const import DOMAIN
 from custom_components.food_diary.planner import PLAN_NOTE
+from custom_components.food_diary.sources import SensorLibrary
 
 from .conftest import ALEX
 
@@ -59,7 +60,7 @@ def book(hass):
 def checker(hass, setup, dishes=(PASTA, STEW)):
     hass.states.async_set("sensor.dish_library", "x", {"dishes": list(dishes)})
     data = setup.runtime_data
-    data.dishes_sensor = data.checker.dishes_sensor = "sensor.dish_library"
+    data.recipes = data.checker.recipes = SensorLibrary(hass, "sensor.dish_library")
     data.checker.gap = 0
     return data.checker
 

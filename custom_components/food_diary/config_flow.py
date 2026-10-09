@@ -18,9 +18,11 @@ from .const import (
     CONF_OPEN_PATH,
     CONF_PERSON,
     CONF_PLAN_SENSOR,
+    CONF_SOURCE,
     CONF_WEBHOOK_ID,
     DOMAIN,
 )
+from .sources import registered
 
 
 def _notify_options(hass: HomeAssistant) -> list[str]:
@@ -39,17 +41,20 @@ def _options_schema(hass: HomeAssistant, current: dict[str, Any]) -> vol.Schema:
     def opt(key: str) -> vol.Optional:
         return vol.Optional(key, description={"suggested_value": current.get(key)})
 
-    return vol.Schema(
-        {
-            opt(CONF_AI_TASK): selector.EntitySelector(selector.EntitySelectorConfig(domain="ai_task")),
-            opt(CONF_NOTIFY): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=_notify_options(hass), custom_value=True)
-            ),
-            opt(CONF_OPEN_PATH): selector.TextSelector(),
-            opt(CONF_PLAN_SENSOR): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            opt(CONF_DISHES_SENSOR): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-        }
-    )
+    schema = {
+        opt(CONF_AI_TASK): selector.EntitySelector(selector.EntitySelectorConfig(domain="ai_task")),
+        opt(CONF_NOTIFY): selector.SelectSelector(
+            selector.SelectSelectorConfig(options=_notify_options(hass), custom_value=True)
+        ),
+        opt(CONF_OPEN_PATH): selector.TextSelector(),
+        opt(CONF_PLAN_SENSOR): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+        opt(CONF_DISHES_SENSOR): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+    }
+    # another integration's recipes and plan: offered only once one is registered (or already chosen)
+    sources = sorted({*registered(hass), *([current[CONF_SOURCE]] if current.get(CONF_SOURCE) else [])})
+    if sources:
+        schema[opt(CONF_SOURCE)] = selector.SelectSelector(selector.SelectSelectorConfig(options=sources))
+    return vol.Schema(schema)
 
 
 class FoodDiaryConfigFlow(ConfigFlow, domain=DOMAIN):

@@ -24,13 +24,14 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.event import async_call_later, async_track_state_change_event
+from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN
 from .diary import Book, num, nums
-from .library import ingredient_lines as lines, plain_name, read_dishes
+from .library import ingredient_lines as lines, plain_name
+from .sources import MealPlan, RecipeLibrary, read_dishes
 
 if TYPE_CHECKING:
     from .estimate import Estimator
@@ -178,9 +179,9 @@ class Checker:
     """Keeps the recipe book's doubts up to date, and answers "are these numbers right?"."""
 
     def __init__(
-        self, hass: HomeAssistant, estimator: Estimator, dishes_sensor: str | None, plan_sensor: str | None = None
+        self, hass: HomeAssistant, estimator: Estimator, recipes: RecipeLibrary | None, plan: MealPlan | None = None
     ) -> None:
-        self.hass, self.estimator, self.dishes_sensor, self.plan_sensor = hass, estimator, dishes_sensor, plan_sensor
+        self.hass, self.estimator, self.recipes, self.plan = hass, estimator, recipes, plan
         self._lock = asyncio.Lock()
         self._pending: CALLBACK_TYPE | None = None
         self._live = False
@@ -191,7 +192,7 @@ class Checker:
         return self.hass.data[DOMAIN]["dishes"]
 
     def library(self) -> dict[str, dict[str, Any]]:
-        return {x["id"]: x for x in read_dishes(self.hass, self.dishes_sensor)}
+        return {x["id"]: x for x in read_dishes(self.recipes) or []}
 
     # ---------- running by itself ----------
 
@@ -199,8 +200,8 @@ class Checker:
     def async_start(self) -> list[CALLBACK_TYPE]:
         """Look over the book shortly after start, and again a minute after the plan or the dish library change."""
         self._live = True
-        ids = [x for x in (self.dishes_sensor, self.plan_sensor) if x]
-        return [async_track_state_change_event(self.hass, ids, self._changed), self.schedule(90), self._stop]
+        subscribed = [x.async_subscribe(self._changed) for x in (self.recipes, self.plan) if x]
+        return [*subscribed, self.schedule(90), self._stop]
 
     @callback
     def _stop(self) -> None:
@@ -214,7 +215,7 @@ class Checker:
             self._pending = None
 
     @callback
-    def _changed(self, _event: Event) -> None:
+    def _changed(self) -> None:
         self.schedule(60)
 
     @callback
