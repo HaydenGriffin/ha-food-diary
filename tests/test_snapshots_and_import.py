@@ -4,6 +4,7 @@ source in stored data, and last-logged times stored without an offset."""
 from __future__ import annotations
 
 import copy
+from datetime import timedelta
 
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import ServiceValidationError, Unauthorized
@@ -146,6 +147,28 @@ async def test_last_logged_reads_times_without_an_offset_as_local(hass: HomeAssi
     state = hass.states.get("sensor.alex_food_diary_last_logged")
     at = dt_util.parse_datetime(state.state)
     assert at is not None and dt_util.as_local(at).strftime("%H:%M") == "09:30"
+
+
+async def test_last_logged_ignores_the_meal_plan_ahead(hass: HomeAssistant, setup):
+    """Seen live: planned meals for the days ahead (added by the planner yesterday) kept the sensor on yesterday's time,
+    while food logged today, by words, again and from a photo, didn't move it."""
+    diary = setup.runtime_data.diary
+    today = dt_util.now().date()
+    yesterday, ahead = (today - timedelta(days=1)).isoformat(), (today + timedelta(days=2)).isoformat()
+    planned = {"name": "Chilli", "meal": "dinner", "kcal": 600, "source": "plan", "plan_key": f"{ahead}|dinner"}
+    diary.data["days"][ahead] = [{**planned, "id": "p1", "at": f"{yesterday}T08:15+01:00", "rev": 1}]
+    diary.data["days"][today.isoformat()] = [
+        {**planned, "id": "p0", "at": f"{yesterday}T08:15+01:00", "plan_key": f"{today}|dinner"},
+        *(
+            {"id": f"e{i}", "name": n, "meal": "lunch", "kcal": 100, "source": src, "at": f"{today}T10:5{i}+01:00", "rev": 1}
+            for i, (n, src) in enumerate((("Soup", "text"), ("Bread", "text"), ("Tea", "again"), ("Salad", "photo")))
+        ),
+    ]
+    diary.async_refresh()
+    await hass.async_block_till_done()
+    state = hass.states.get("sensor.alex_food_diary_last_logged")
+    assert dt_util.parse_datetime(state.state) == dt_util.parse_datetime(f"{today}T10:53+01:00")
+    assert state.attributes["name"] == "Salad"
 
 
 async def test_a_user_context(hass: HomeAssistant, setup):

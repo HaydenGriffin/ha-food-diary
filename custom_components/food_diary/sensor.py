@@ -152,6 +152,14 @@ class DiarySensor(_DiaryEntity):
         return {"goal": d["goals"].get(nutrient), "left": d["left"].get(nutrient)}
 
 
+def logged_at(e: dict[str, Any]) -> datetime | None:
+    """When an entry was logged; a time stored without an offset (older or imported data) is local time."""
+    at = dt_util.parse_datetime(str(e.get("at") or ""))
+    if at is not None and at.tzinfo is None:
+        at = at.replace(tzinfo=dt_util.get_default_time_zone())
+    return at
+
+
 class LastLoggedSensor(_DiaryEntity):
     """When something was last logged (for reminders like "nothing logged since breakfast")."""
 
@@ -163,19 +171,20 @@ class LastLoggedSensor(_DiaryEntity):
         super().__init__(entry, "last_logged")
 
     def _last(self) -> dict[str, Any] | None:
-        days = self.data.diary.data["days"]
-        for d in sorted(days, reverse=True)[:3]:
-            if days[d]:
-                return max(days[d], key=lambda e: e.get("at", ""))
-        return None
+        """The food logged most recently, by when it was logged. Only today and the days before count, and never the meal
+        plan's entries: the planner fills the days ahead, and the newest day with entries is usually one of those, which
+        kept this sensor on when a planned meal was added instead of when food was last logged."""
+        days, now = self.data.diary.data["days"], today()
+        logged = [
+            e for d in sorted((d for d in days if d <= now), reverse=True)[:3] for e in days[d] if e.get("source") != "plan"
+        ]
+        timed = [(at, e) for e in logged if (at := logged_at(e)) is not None]
+        return max(timed, key=lambda x: x[0])[1] if timed else None
 
     @property
     def native_value(self) -> datetime | None:
         e = self._last()
-        at = dt_util.parse_datetime(e["at"]) if e and e.get("at") else None
-        if at is not None and at.tzinfo is None:  # stored without an offset (older or imported data): local time
-            at = at.replace(tzinfo=dt_util.get_default_time_zone())
-        return at
+        return logged_at(e) if e else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
