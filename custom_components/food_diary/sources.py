@@ -10,6 +10,16 @@ The diary reads two optional things, each through a provider:
         def days(self) -> list[dict] | None: ...             # None: not available right now (never "nothing planned")
         def async_subscribe(self, on_change) -> CALLBACK_TYPE: ...
 
+A plan may also follow the diary, by having one more method:
+
+        def follow(self, change: dict) -> None: ...          # in the event loop; never blocks
+
+It's told each of the person's own changes to a planned entry as it happens: `{"action": "deleted" | "renamed" | "moved" |
+"restored", "date", "meal", "name"}` (the plan meal it's in now, and its name now), plus `previous` (the name before) for
+renamed and moved, and `from` (the meal it left) for moved. A provider that follows changes what `days()` returns at once
+(the planner reads it straight after) and writes the change to its own plan. Then a deleted planned entry is taken off the
+plan rather than remembered as dismissed (diary.py, planner.py).
+
 Reads are synchronous and cheap (a provider keeps what it last fetched); `async_subscribe` calls `on_change()` (no
 arguments, in the event loop) whenever either may have changed, and returns the function that stops it.
 
@@ -58,6 +68,11 @@ class MealPlan(Protocol):
     def days(self) -> list[dict[str, Any]] | None: ...
 
     def async_subscribe(self, on_change: Callable[[], None]) -> CALLBACK_TYPE: ...
+
+
+def follows(plan: MealPlan | None) -> bool:
+    """Whether a plan follows the diary (see above)."""
+    return callable(getattr(plan, "follow", None))
 
 
 # ---------- the default: sensors ----------

@@ -120,6 +120,9 @@ log_food:
     client_id:
       selector:
         text: {}
+    plan_key:
+      selector:
+        text: {}
 update_food:
   fields:
     person:

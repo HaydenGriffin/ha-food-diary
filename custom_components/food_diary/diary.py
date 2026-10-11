@@ -8,6 +8,11 @@ Every entry has a revision (`rev`, 1 when made, one more on every change), so an
 (`expected_rev`) and background work can tell that an entry changed while it waited. A create that comes with a `client_id`
 (an id the app made for that one action) happens once: the diary keeps a ledger of them, with the entry each one made, that
 outlives the entry, so a retried or doubled request returns the first result instead of logging the food again.
+
+A meal plan can follow the diary (sources.py, `follow`): then the person's own changes to a planned entry (one with a
+`plan_key` "<date>|<meal>") are told to it as they happen: deleted, renamed, moved to another meal, or put back (a re-log
+with its plan_key, restore_snapshot, undo_copy). The planner's own adds and removals are never told (they follow the plan).
+Without such a plan, deleting a planned entry is remembered (`dismissed`) so the plan doesn't put it back.
 """
 
 from __future__ import annotations
@@ -30,9 +35,10 @@ from homeassistant.util import dt as dt_util
 
 from .const import DEFAULT_GOALS, DOMAIN, MEALS, NUM
 
+PLANNED = ("breakfast", "lunch", "dinner")  # the meals a plan has (sources.PLANNED_MEALS)
 STORE_VERSION = 1  # rev, client_id and the client_id ledger are additions older versions load (and ignore) as they are
 KEPT = ("estimate", "portions", "dismissed")  # a dish's book entry: kept through new numbers (see checks.py)
-NOT_COPIED = ("id", "at", "rev", "client_id", "plan_key", "edited")  # a copied entry is a new entry
+NOT_COPIED = ("id", "at", "rev", "client_id", "plan_key", "plan_was", "edited")  # a copied entry is a new entry
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -114,6 +120,7 @@ class Diary:
         self._undo: list[dict[str, Any]] = []  # the last ten copies, for undo_copy (not kept over a restart)
         self._snapshots: list[dict[str, Any]] = []  # the last ten snapshots, for restore_snapshot (not kept either)
         self._creating: dict[str, tuple[asyncio.Lock, list[int]]] = {}  # client_id -> (its lock, how many wait on it)
+        self.plan_follower: Callable[[dict[str, Any]], None] | None = None  # set by the planner when its plan follows
 
     async def async_load(self) -> None:
         stored = await self.store.async_load()
@@ -132,6 +139,48 @@ class Diary:
 
     def forget_dismissed_before(self, d: str) -> None:
         self.data["dismissed"] = {k: v for k, v in self.data.get("dismissed", {}).items() if k.split("|")[0] >= d}
+
+    # ---------- a plan that follows the diary ----------
+
+    def _tell_plan(self, action: str, d: str, meal: str, name: str, **extra: Any) -> None:
+        """One of the person's changes to a planned entry, for a plan that follows the diary. A plan that fails never
+        stops the change itself."""
+        if self.plan_follower is None:
+            return
+        try:
+            self.plan_follower({"action": action, "date": d, "meal": meal, "name": name, **extra})
+        except Exception:
+            _LOGGER.exception("The meal plan couldn't follow the diary (%s %s on %s)", action, meal, d)
+
+    @staticmethod
+    def plan_meal(e: dict[str, Any]) -> str:
+        """The plan meal a planned entry stands for ("" for none)."""
+        return str(e.get("plan_key") or "").partition("|")[2]
+
+    def _put_back(self, d: str, e: dict[str, Any]) -> None:
+        """A planned entry is back (a re-log of it, a restore): it isn't dismissed any more, and a following plan is told."""
+        if not e.get("plan_key"):
+            return
+        self.data.get("dismissed", {}).pop(e["plan_key"], None)
+        self._tell_plan("restored", d, self.plan_meal(e), e["name"])
+
+    def link(self, d: str, entry_id: str, plan_key: str) -> dict[str, Any] | None:
+        """The planner takes an entry the person logged as the plan's for that meal (the plan was set to it)."""
+        if (e := self.find(d, entry_id)) is None:
+            return None
+        e["plan_key"] = plan_key
+        self._changed_entry(e)
+        self.async_changed()
+        return e
+
+    def unlink(self, d: str, entry_id: str) -> dict[str, Any] | None:
+        """The plan moved on from an entry the person logged: it stays, as just hers."""
+        if (e := self.find(d, entry_id)) is None:
+            return None
+        e.pop("plan_key", None)
+        self._changed_entry(e)
+        self.async_changed()
+        return e
 
     @callback
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
@@ -356,10 +405,19 @@ class Diary:
 
     # ---------- writing ----------
 
-    def add(self, d: str, f: dict[str, Any]) -> dict[str, Any]:
+    def add(self, d: str, f: dict[str, Any], planned: bool = False) -> dict[str, Any]:
+        """A new entry. The planner's own adds are `planned`; anyone else's with a `plan_key` puts a planned meal back
+        (Undo after a delete): kept only when it matches the entry's day and meal."""
         entry = self._new_entry(f)
         self._recount(entry)
-        return self._insert(d, entry)
+        if not planned and entry.get("plan_key") and entry["plan_key"] != f"{d}|{entry['meal']}":
+            entry.pop("plan_key")
+            if entry["source"] == "plan":
+                entry["source"] = "again"  # planned food put back where the plan isn't: just food she had
+        out = self._insert(d, entry)
+        if not planned:
+            self._put_back(d, out)
+        return out
 
     def _insert(self, d: str, entry: dict[str, Any]) -> dict[str, Any]:
         self.data["days"].setdefault(d, []).append(entry)
@@ -428,6 +486,7 @@ class Diary:
                 p = num(e.get("portions")) or 1.0
                 e["per_portion"] = {k: round((num(f[k]) if k in f else num(e.get(k))) / p, 2) for k in NUM}
                 e["edited"] = True
+            was_name, was_meal = e["name"], e["meal"]
             if str(f.get("name") or "").strip():
                 e["name"] = str(f["name"]).strip()[:80]
             if f.get("meal") in MEALS:
@@ -439,9 +498,31 @@ class Diary:
                     e.pop("checked", None)
             self._recount(e)
             self._changed_entry(e)
+            self._follow_edit(d, e, was_name, was_meal)
             self.async_changed()
             return e
         return None
+
+    def _follow_edit(self, d: str, e: dict[str, Any], was_name: str, was_meal: str) -> None:
+        """A planned entry renamed or moved: a following plan takes the new name, or the meal moves on the plan too (to a
+        meal the plan has; to a snack it's off the plan, and the entry is just hers until it's moved back)."""
+        if self.plan_follower is None:
+            return
+        if not e.get("plan_key"):
+            if e["meal"] != was_meal and e.get("plan_was") == f"{d}|{e['meal']}":  # moved back from a snack (Undo)
+                e["plan_key"] = e.pop("plan_was")
+                self._tell_plan("restored", d, e["meal"], e["name"])
+            return
+        old = self.plan_meal(e)
+        if e["meal"] != was_meal:
+            if e["meal"] in PLANNED:
+                e["plan_key"] = f"{d}|{e['meal']}"
+                self._tell_plan("moved", d, e["meal"], e["name"], **{"from": old, "previous": was_name})
+            else:
+                e["plan_was"] = e.pop("plan_key")
+                self._tell_plan("deleted", d, old, was_name)
+        elif e["name"] != was_name:
+            self._tell_plan("renamed", d, old, e["name"], previous=was_name)
 
     def renumber(
         self, d: str, entry_id: str, values: dict[str, Any], ref: str, note: str, expected_rev: int | None = None
@@ -473,13 +554,17 @@ class Diary:
         return changed
 
     def delete(self, d: str, entry_id: str, dismiss: bool = True, expected_rev: int | None = None) -> dict[str, Any] | None:
-        """Remove an entry. Removing one that came from the meal plan remembers it, so the plan doesn't put it back."""
+        """Remove an entry. Removing one that came from the meal plan (`dismiss`: the person, not the planner) takes it off a
+        plan that follows the diary; with any other plan it's remembered, so the plan doesn't put it back."""
         entries = self.entries(d)
         for e in entries:
             if e["id"] == entry_id:
                 self._check_rev(e, expected_rev)
                 if dismiss and e.get("plan_key"):
-                    self.data.setdefault("dismissed", {})[e["plan_key"]] = e["name"].lower()
+                    if self.plan_follower is not None:
+                        self._tell_plan("deleted", d, self.plan_meal(e), e["name"])
+                    else:
+                        self.data.setdefault("dismissed", {})[e["plan_key"]] = e["name"].lower()
                 entries.remove(e)
                 if not entries:
                     self.data["days"].pop(d, None)
@@ -548,6 +633,9 @@ class Diary:
         for d, gone in record["removed"].items():
             self.data["days"].setdefault(d, []).extend(gone)
         self.data["dismissed"] = record["dismissed"]
+        for d, gone in record["removed"].items():
+            for e in gone:
+                self._put_back(d, e)
         self._undo.remove(record)
         self.async_changed()
         return True
@@ -588,10 +676,13 @@ class Diary:
             i = next((n for n, x in enumerate(entries) if x["id"] == kept["id"]), None)
             back = copy.deepcopy(kept)
             back["rev"] = max(rev(kept), rev(entries[i]) if i is not None else 0) + 1
+            now = entries[i] if i is not None else {}
             if i is None:
                 entries.append(back)
             else:
                 entries[i] = back
+            if (now.get("plan_key"), now.get("name")) != (back.get("plan_key"), back.get("name")):
+                self._put_back(d, back)
         if "book" in record and book is not None:
             book.put(record["book"][0], copy.deepcopy(record["book"][1]))
         self._snapshots.remove(record)

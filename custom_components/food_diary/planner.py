@@ -16,7 +16,13 @@ Then:
 - the plan changes → the entry is replaced; the slot empties → it's removed (unless its numbers were edited);
 - the book's numbers for a planned meal change → its entry takes them (its portions stay), unless its numbers were edited;
 - a planned entry that's deleted is remembered and not put back (until that slot's meal changes);
-- something already logged in that meal on that day → the plan adds nothing (no double counting).
+- something already logged in that meal on that day → the plan adds nothing (no double counting);
+- only entries the planner made are removed: one the person logged and the plan took (below) is just let go.
+
+A plan that follows the diary (its provider has `follow`, sources.py) goes the other way too: the person deleting, renaming,
+moving or putting back a planned entry is told to it at once (diary.py), so nothing is dismissed and the plan takes the
+change; and when the plan is set to what the person logged in that meal ("Replace the planned dish with this?"), that entry
+becomes the planned one (it keeps its numbers) instead of the planner adding another.
 Past days are never touched, and nothing is done while the plan or the library isn't available; a meal a provider leaves
 out of a day (not known) is left as it is.
 
@@ -42,7 +48,17 @@ from .const import DOMAIN
 from .diary import Book, canonical_hash, nums, rev, today
 from .library import find_dish, ingredient_lines, plain_name
 from .macros import complete, partial
-from .sources import PLANNED_MEALS, MealPlan, RecipeLibrary, SensorLibrary, SensorPlan, find_slot, read_dishes, read_plan
+from .sources import (
+    PLANNED_MEALS,
+    MealPlan,
+    RecipeLibrary,
+    SensorLibrary,
+    SensorPlan,
+    find_slot,
+    follows,
+    read_dishes,
+    read_plan,
+)
 
 if TYPE_CHECKING:
     from . import FoodDiaryData
@@ -78,11 +94,25 @@ class Planner:
     @callback
     def async_start(self) -> list[CALLBACK_TYPE]:
         """Listeners to stop on unload: plan or library changes (debounced), a new day, and a first run after start."""
+        stops = []
+        if follows(self.plan):
+            self.data.diary.plan_follower = self._follow
+            stops.append(self._unfollow)
         return [
+            *stops,
             *(x.async_subscribe(self._changed) for x in (self.plan, self.recipes) if x),
             async_track_time_change(self.hass, self._new_day, hour=0, minute=1, second=0),
             self.schedule(20),
         ]
+
+    @callback
+    def _follow(self, change: dict[str, Any]) -> None:
+        self.plan.follow(change)  # type: ignore[attr-defined]
+
+    @callback
+    def _unfollow(self) -> None:
+        if self.data.diary.plan_follower == self._follow:
+            self.data.diary.plan_follower = None
 
     @callback
     def _changed(self) -> None:
@@ -166,25 +196,32 @@ class Planner:
         mine = [e for e in diary.entries(d) if e.get("plan_key") == pkey]
         name = slot["name"] if slot else ""
         if not slot:
-            gone = [e for e in mine if not e.get("edited")]
+            gone = [e for e in mine if not e.get("edited") or e.get("source") != "plan"]
             for e in gone:
-                diary.delete(d, e["id"], dismiss=False)
+                self._let_go(d, e)
             return len(gone)
-        if same := [e for e in mine if e["name"].lower() == name.lower()]:
-            return sum([await self._refresh(d, meal, e, slot, dishes) for e in same])
-        for e in mine:  # the plan changed to another meal
-            diary.delete(d, e["id"], dismiss=False)
+        same = [e for e in mine if e["name"].lower() == name.lower()]
+        for e in mine:  # the plan changed to another meal (or another entry was moved onto this one)
+            if e not in same:
+                self._let_go(d, e)
+        changed = len(mine) - len(same)
+        if same:
+            return changed + sum([await self._refresh(d, meal, e, slot, dishes) for e in same])
         if diary.dismissed(pkey, name):
-            return len(mine)
-        if any(e.get("meal") == meal and not e.get("plan_key") for e in diary.entries(d)):
-            return len(mine)  # this meal is already logged by hand
+            return changed
+        logged = [e for e in diary.entries(d) if e.get("meal") == meal and not e.get("plan_key")]
+        if follows(self.plan) and (hers := next((e for e in logged if e["name"].lower() == name.lower()), None)):
+            diary.link(d, hers["id"], pkey)  # the plan was set to what she logged: hers is the planned one now
+            return changed + 1
+        if logged:
+            return changed  # this meal is already logged by hand
         before = self._slot_state(d, meal)
         found = await self._nutrition(slot, dishes)
         if not found:
-            return len(mine)
+            return changed
         if self._slot_state(d, meal) != before:
             _LOGGER.debug("Not adding planned %s on %s: the slot changed while its numbers were worked out", meal, d)
-            return len(mine)
+            return changed
         values, ref = found
         diary.add(
             d,
@@ -198,13 +235,21 @@ class Planner:
                 "note": PLAN_NOTE,
                 **values,
             },
+            planned=True,
         )
-        return len(mine) + 1
+        return changed + 1
+
+    def _let_go(self, d: str, e: dict[str, Any]) -> None:
+        """An entry the planner made goes; one the person logged (and the plan took) stays, just hers."""
+        if e.get("source") == "plan":
+            self.data.diary.delete(d, e["id"], dismiss=False)
+        else:
+            self.data.diary.unlink(d, e["id"])
 
     async def _refresh(self, d: str, meal: str, e: dict[str, Any], slot: dict[str, Any], dishes: list[dict[str, Any]]) -> int:
         """A planned entry takes the book's current numbers (completed, or newly arrived); never one whose numbers were
-        edited, nor one that changed (or whose slot did) while the numbers were worked out."""
-        if e.get("edited"):
+        edited, one the person logged herself, nor one that changed (or whose slot did) while the numbers were worked out."""
+        if e.get("edited") or e.get("source") != "plan":
             return 0
         before = self._slot_state(d, meal)
         found = await self._nutrition(slot, dishes)

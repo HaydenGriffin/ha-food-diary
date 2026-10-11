@@ -44,7 +44,7 @@ LOG_SCHEMA = vol.Schema(
         vol.Optional("portions", default=1): PORTIONS,
         vol.Optional("meal"): vol.In(MEALS),
         DATE: cv.date,
-        vol.Optional("source", default="manual"): vol.In(SOURCES),
+        vol.Optional("source", default="manual"): vol.In((*SOURCES, "plan")),  # "plan": putting a planned meal back
         vol.Optional("ref"): cv.string,
         vol.Optional("note"): cv.string,
         vol.Optional("barcode"): cv.string,
@@ -55,6 +55,7 @@ LOG_SCHEMA = vol.Schema(
         vol.Optional("photo"): cv.string,
         vol.Optional("image_url"): cv.string,
         vol.Optional("client_id"): CLIENT_ID,
+        vol.Optional("plan_key"): vol.All(cv.string, vol.Match(r"^\d{4}-\d{2}-\d{2}\|(breakfast|lunch|dinner)$")),
     }
 )
 UPDATE_SCHEMA = vol.Schema(
@@ -250,6 +251,8 @@ def async_register_services(hass: HomeAssistant) -> None:
         if not num(f.get("kcal")) and not (f.get("per_100") and num(f.get("grams"))):
             raise ServiceValidationError("Give kcal, or per_100 with grams.")
         day = f.pop("date").isoformat() if f.get("date") else today()
+        if f.get("source") == "plan" and not f.get("plan_key"):
+            f["source"] = "again"  # only the plan's own entries (and Undo putting one back) are "plan"
 
         async def create() -> dict[str, Any]:
             if f.get("photo"):  # the meal photo it was estimated from: kept with the entry

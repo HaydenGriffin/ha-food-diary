@@ -189,6 +189,7 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 | `photo` | string | The `photo` value an `estimate` returned. The picture is kept with the entry. |
 | `image_url` | string | An `https://` product picture. |
 | `client_id` | string | See [Doing things once](#doing-things-once-and-revisions). |
+| `plan_key` | string | Puts a deleted planned entry back (Undo): its `plan_key` as it was. Kept only when it matches `date` and `meal`; with it, `source` may be `plan`. A plan that [follows the diary](#a-plan-that-follows-the-diary) puts the meal back on the plan. |
 
 The time-of-day meal is breakfast before 10:30, lunch before 14:30, snack before 17:30, dinner before 21:30, and snack
 after that.
@@ -219,7 +220,8 @@ Changes an existing entry.
 #### `food_diary.delete_food` (response: optional)
 
 Removes an entry. Fields: `person`, `entry_id` (**required**), `date`, `expected_rev`. If you remove a planned entry, the
-planner remembers it and won't add it back.
+planner remembers it and won't add it back; with a plan that [follows the diary](#a-plan-that-follows-the-diary), the meal
+comes off the plan instead.
 
 **Response:** `{"ok": true}`.
 
@@ -633,6 +635,7 @@ How the plan is applied:
   numbers were edited.
 - **Deleted entries:** if you delete a planned entry, it stays deleted until that slot's meal changes.
 - **No double counting:** if a meal was already logged by hand that day, the plan adds nothing.
+- **Only its own:** the planner removes only entries it made. One you logged that the plan took (below) is just let go.
 - **Recipe changes:** if the recipe book's numbers change (for example, the library's `nutrition` arrives later), planned
   entries take them. Their portions stay, and entries whose numbers were edited are left alone.
 
@@ -712,6 +715,28 @@ unregister = async_register_source(hass, "my_recipes", library=Library(), plan=P
   it is. `None` or `""` means nothing is planned.
 - The food diary doesn't depend on your integration; yours depends on `food_diary` (add it to `dependencies` in your
   manifest).
+
+### A plan that follows the diary
+
+A plan provider may also have `follow(change)` (a callback, in the event loop; it must not block). Then the diary and the
+plan stay in step both ways. Each of the person's own changes to a planned entry is passed to it as it happens:
+
+| `action` | When | Also |
+| --- | --- | --- |
+| `deleted` | A planned entry is deleted, or moved to a snack. | |
+| `renamed` | A planned entry is renamed. | `previous`: the old name. |
+| `moved` | A planned entry is moved to another planned meal. Its `plan_key` follows. | `from`: the meal it left; `previous`: the name before. |
+| `restored` | A planned entry is back: `log_food` with its `plan_key`, `restore_snapshot`, `undo_copy`, or moved back from a snack to the meal it was planned for. | |
+
+Every change has `date`, `meal` (the plan meal it's in now) and `name` (its name now). Past days are passed on too. The
+planner's own adds and removals never are.
+
+- **Change `days()` at once**, then write the change to your plan. The planner reads the plan straight after; until it says
+  the new name, a renamed entry would look like a plan change.
+- **Deletes aren't remembered** as dismissed: the plan no longer has the meal, so there is nothing to keep out.
+- **Taking her food:** when the plan is set to the name of something already logged in that meal (an app asking "Replace
+  the planned dish with this?"), that entry becomes the planned one: it gets the `plan_key`, keeps its numbers, and the
+  old planned entry goes. If the plan later moves on, it stays as hers, without the `plan_key`.
 
 ## Recipe numbers check
 
