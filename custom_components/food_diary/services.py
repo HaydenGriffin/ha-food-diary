@@ -3,7 +3,10 @@
 
 Creating services (log_food, copy_day) take an optional `client_id`: the same id again returns the first result with
 `duplicate: true` (and `deleted: true` once its entry is gone) instead of creating again. Changing services take an optional
-`expected_rev`: the entry's `rev` as the caller last saw it; when it has changed since, the call fails with `conflict`."""
+`expected_rev`: the entry's `rev` as the caller last saw it; when it has changed since, the call fails with `conflict`.
+
+A macro left out of log_food (or listed in its `unknown`, as an estimate, a saved meal or a recent food lists it) is
+unknown, not 0: the entry keeps it in `unknown`, and get_day / get_history / get_week_review count it in `incomplete`."""
 
 from __future__ import annotations
 
@@ -18,8 +21,8 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
 import voluptuous as vol
 
-from .const import DISH_SOURCES, DOMAIN, MEALS, NUM, SOURCES
-from .diary import Book, Diary, num, nums, today
+from .const import DISH_SOURCES, DOMAIN, MACROS, MEALS, NUM, SOURCES
+from .diary import Book, Diary, entry_unknown, num, nums, today, unknown_in, values_of
 from .notifications import fire_logged
 from .photos import with_images
 from .sources import read_dishes
@@ -35,6 +38,7 @@ PORTIONS = vol.All(vol.Coerce(float), vol.Range(min=0.05, max=50))
 RECIPE_PORTIONS = vol.All(vol.Coerce(int), vol.Range(min=1, max=24))
 CLIENT_ID = vol.All(cv.string, vol.Match(r"^[A-Za-z0-9_-]{8,64}$"))  # made by the app, once per action (a UUID is fine)
 EXPECTED_REV = vol.All(vol.Coerce(int), vol.Range(min=1))
+UNKNOWN = vol.All(cv.ensure_list, [vol.In(MACROS)])  # macros not known (sent back as an estimate or a saved meal gave them)
 
 LOG_SCHEMA = vol.Schema(
     {
@@ -55,6 +59,7 @@ LOG_SCHEMA = vol.Schema(
         vol.Optional("photo"): cv.string,
         vol.Optional("image_url"): cv.string,
         vol.Optional("client_id"): CLIENT_ID,
+        vol.Optional("unknown"): UNKNOWN,
         vol.Optional("plan_key"): vol.All(
             cv.string, vol.Match(r"^\d{4}-\d{2}-\d{2}\|(breakfast|lunch|dinner)(\|side:\d{1,2})?$")
         ),
@@ -212,11 +217,13 @@ def logged(diary: Diary, record: dict[str, Any], repeat: bool) -> dict[str, Any]
     """log_food's answer, for a new entry or a repeated client_id: the entry as it is now (None once it's deleted)."""
     d = record["date"]
     e = diary.find(d, record["entry_id"])
+    day = diary.day(d)
     return {
         "entry": e,
         "entry_id": record["entry_id"],
         "date": d,
-        "totals": diary.day(d)["totals"],
+        "totals": day["totals"],
+        **({"incomplete": day["incomplete"]} if "incomplete" in day else {}),
         **repeat_flags(repeat, e is None),
     }
 
@@ -368,7 +375,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                     "times": int(num(x.get("times"))),
                     "meal_types": x.get("meal_types") or [],
                     "added": str(x.get("added") or ""),
-                    **({**nums(n), "kcal_source": n.get("source")} if num(n.get("kcal")) else {}),
+                    **({**values_of(n), "kcal_source": n.get("source")} if num(n.get("kcal")) else {}),
                     **({"check": n["check"]} if n.get("check") else {}),
                 }
             )
@@ -407,11 +414,11 @@ def async_register_services(hass: HomeAssistant) -> None:
         """A recipe's numbers for one portion (and how many portions it makes): any doubt about them goes, and diary
         entries for it from today on whose numbers weren't edited follow the new numbers."""
         dish_id = call.data["dish_id"]
-        values = {**nums(call.data), "source": call.data["source"]}
+        values = {**values_of(call.data), "source": call.data["source"]}  # a macro left out is unknown, not 0
         if call.data.get("portions"):
             values["portions"] = call.data["portions"]
         kept = dishes_book(hass).set(dish_id, values)
-        refreshed = sum(e.runtime_data.diary.follow(dish_id, nums(kept), today()) for e in loaded(hass))
+        refreshed = sum(e.runtime_data.diary.follow(dish_id, values_of(kept), today()) for e in loaded(hass))
         for e in loaded(hass):
             e.runtime_data.checker.schedule(5)
         return {**public(kept), "refreshed": refreshed}
@@ -424,7 +431,8 @@ def async_register_services(hass: HomeAssistant) -> None:
             if not (dish := library.get(dish_id)):
                 raise ServiceValidationError("That isn't a recipe in the dish library.")
             name = str(dish.get("name_en") or dish.get("name") or "")
-            yours, key = nums(dishes_book(hass).get(dish_id)), dish_id
+            known = dishes_book(hass).get(dish_id)
+            yours, key, unknown = nums(known), dish_id, unknown_in(known) if known else []
         elif entry_id := call.data.get("entry_id"):
             e = next((x for x in data.diary.entries(day_of(call)) if x["id"] == entry_id), None)
             if e is None:
@@ -432,9 +440,10 @@ def async_register_services(hass: HomeAssistant) -> None:
             ref = str(e.get("ref") or "")
             dish = library.get(ref) if ref else None
             yours, key, name = nums(e.get("per_portion") or e), (ref if dish else None), e["name"]
+            unknown = entry_unknown(e)
         else:
             raise ServiceValidationError("Give dish_id, or entry_id and date.")
-        return await data.checker.compare(yours, key, dish, name, call.data.get("portions"))
+        return await data.checker.compare(yours, key, dish, name, call.data.get("portions"), unknown)
 
     async def dismiss_check(call: ServiceCall) -> ServiceResponse:
         if resolve(hass, call).checker.dismiss(call.data["dish_id"]) is None:
@@ -457,6 +466,8 @@ def async_register_services(hass: HomeAssistant) -> None:
         if e:
             kept = {k: e.get(k) for k in ("id", "rev", "name", "meal", "portions", "ref", "source", "edited", *NUM)}
             kept |= {"date": entry[0], "per_portion": nums(e.get("per_portion"))}
+            if u := entry_unknown(e):
+                kept["unknown"] = u
         return {"token": r["token"], "entries": len(r["entries"]), "entry": kept, "dish": public(known) if known else None}
 
     async def restore_snapshot(call: ServiceCall) -> ServiceResponse:

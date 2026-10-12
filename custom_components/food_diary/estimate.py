@@ -29,7 +29,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import MAX_IMAGE_BYTES, NUM, OFF_FIELDS, OFF_URL, OFF_USER_AGENT, PHOTO_DAYS, PHOTO_DIR
-from .diary import Book, num, nums
+from .diary import Book, given, num, values_of
 
 _LOGGER = logging.getLogger(__name__)
 LABELS = {
@@ -198,8 +198,9 @@ def amount_grams(amount: str, serving: float, pack: float) -> float | None:
 
 
 def label_result(x: dict[str, Any]) -> dict[str, Any]:
-    """The label AI's reading (or a product) times what was eaten."""
+    """The label AI's reading (or a product) times what was eaten; `unknown` lists the macros it doesn't give."""
     per_100 = {k: round(num(x.get(f"{k}_100")), 2) for k in NUM}
+    unknown = [k for k in NUM[1:] if not given(x.get(f"{k}_100"))]
     if not per_100["kcal"]:
         raise HomeAssistantError("I couldn't read the calories on that label. Try a closer, straighter photo.")
     unit = "ml" if str(x.get("unit", "")).lower().startswith("ml") else "g"
@@ -221,11 +222,18 @@ def label_result(x: dict[str, Any]) -> dict[str, Any]:
         "guessed": guessed,
         "note": note,
         **{k: round(per_100[k] * grams / 100, 1) for k in NUM},
+        **({"unknown": unknown} if unknown else {}),
     }
 
 
+def opt(v: Any) -> float | None:
+    """A number Open Food Facts may not have: None when it isn't there (unknown), not 0."""
+    return num(v) if given(v) else None
+
+
 def off_product(p: dict[str, Any]) -> dict[str, Any] | None:
-    """An Open Food Facts product as {name, kcal_100, …, unit, serving_g, pack_g}, or None without calories."""
+    """An Open Food Facts product as {name, kcal_100, …, unit, serving_g, pack_g}, or None without calories. A macro it
+    doesn't list is None (unknown)."""
     n = p.get("nutriments") or {}
     kcal = num(n.get("energy-kcal_100g")) or num(n.get("energy_100g")) / 4.184
     if not kcal:
@@ -243,10 +251,10 @@ def off_product(p: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "name": name or "Unnamed product",
         "kcal_100": round(kcal, 1),
-        "protein_g_100": num(n.get("proteins_100g")),
-        "carbs_g_100": num(n.get("carbohydrates_100g")),
-        "fat_g_100": num(n.get("fat_100g")),
-        "fibre_g_100": num(n.get("fiber_100g")),
+        "protein_g_100": opt(n.get("proteins_100g")),
+        "carbs_g_100": opt(n.get("carbohydrates_100g")),
+        "fat_g_100": opt(n.get("fat_100g")),
+        "fibre_g_100": opt(n.get("fiber_100g")),
         "unit": unit,
         "serving_g": num(p.get("serving_quantity")),
         "pack_g": num(p.get("product_quantity")),
@@ -415,12 +423,12 @@ class Estimator:
             if not fresh and (known := self.dishes.get(dish_id)) and num(known.get("kcal")):
                 return self._known_dish(dish_id, name, known)
         else:
-            self.dishes.set(dish_id, {**nums(out), "source": "ai"})
+            self.dishes.set(dish_id, {**values_of(out), "source": "ai"})
         return {**out, "name": name or out["name"], "ref": dish_id, "nutrition_source": "ai"}
 
     @staticmethod
     def _known_dish(dish_id: str, name: str, known: dict[str, Any]) -> dict[str, Any]:
-        return {**nums(known), "name": name, "source": "dish", "ref": dish_id, "nutrition_source": known.get("source", "ai")}
+        return {**values_of(known), "name": name, "source": "dish", "ref": dish_id, "nutrition_source": known.get("source", "ai")}
 
     async def dish_ai(
         self, name: str, ingredients: list[str] | None, servings: float = 0, amounts_per: str = "recipe"
@@ -458,11 +466,12 @@ class Estimator:
 
     @staticmethod
     def _meal(x: dict[str, Any], source: str) -> dict[str, Any]:
+        """The AI's answer for one portion; a macro it left out is listed in `unknown` (and is 0 here)."""
         if not num(x.get("kcal")):
             raise HomeAssistantError("I couldn't work that one out. Try again, or type what it is.")
         return {
             "name": str(x.get("name") or "Something").strip()[:80],
-            **{k: round(num(x.get(k)), 1) for k in NUM},
+            **values_of({k: round(num(x[k]), 1) if given(x.get(k)) else None for k in NUM}),
             "note": str(x.get("note") or "")[:120],
             "foods": [str(f) for f in x.get("foods") or []][:12],
             "source": source,

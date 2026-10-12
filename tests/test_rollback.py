@@ -74,7 +74,8 @@ async def test_v1_loads_and_uses_a_new_diary(hass: HomeAssistant, setup, hass_st
 
 
 async def test_v1_books_are_untouched(hass: HomeAssistant, setup, hass_storage, ai_calls):
-    """The recipe and product books gain no new fields (their 'version' is worked out, not stored)."""
+    """The recipe and product books gain no new fields (their 'version' is worked out, not stored) but `unknown` (1.6.0: the
+    macros a recipe's numbers came without), which an older release ignores, reading their 0s as it always did."""
     await call(hass, "estimate", {"kind": "dish", "dish_id": "ig-9", "dish_name": "Stew", "ingredients": ["beef"]})
     await call(hass, "set_dish_nutrition", {"dish_id": "ig-8", "kcal": 450})
     await hass.async_block_till_done()
@@ -86,6 +87,7 @@ async def test_v1_books_are_untouched(hass: HomeAssistant, setup, hass_storage, 
         "carbs_g",
         "fat_g",
         "fibre_g",
+        "unknown",
         "source",
         "at",
     }

@@ -10,6 +10,7 @@ numbers and ingredients:
   doubt (`check` on the book entry) is the suggested numbers for one portion, the portions they assume and a short reason.
   When another number of portions explains the calories, that's the suggestion ("may serve 2"); when it explains all of
   them, the numbers are right for it and there's no doubt.
+A protein that isn't known (the numbers came without it: `unknown`) is never judged, only the calories.
 The person's own numbers ("own", or "import": logged in another app) are never doubted,
 nor numbers confirmed as right (`dismissed`, until they change). Every
 check is remembered (`checked_for`), so each dish is only looked at again when its numbers, ingredients or portions change.
@@ -30,7 +31,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN
-from .diary import Book, num, nums
+from .diary import Book, num, nums, unknown_in
 from .library import ingredient_lines as lines, plain_name
 from .sources import MealPlan, RecipeLibrary, read_dishes
 
@@ -83,11 +84,14 @@ def per_portion(whole: dict[str, Any], portions: int) -> dict[str, float]:
     return {k: round(num(whole.get(k)) / p, 0 if k == "kcal" else 1) for k in KEYS}
 
 
-def off(yours: dict[str, Any], suggested: dict[str, Any]) -> str | None:
-    """Which number is off the suggestion ("kcal" or "protein_g"), or None when they agree."""
+def off(yours: dict[str, Any], suggested: dict[str, Any], unknown: Any = ()) -> str | None:
+    """Which number is off the suggestion ("kcal" or "protein_g"), or None when they agree. A protein in `unknown` isn't
+    judged: its 0 isn't low, just not known."""
     yk, hk = num(yours.get("kcal")), num(suggested.get("kcal"))
     if hk > 0 and abs(yk - hk) > KCAL_OFF * hk:
         return "kcal"
+    if "protein_g" in (unknown or ()):
+        return None
     yp, hp = num(yours.get("protein_g")), num(suggested.get("protein_g"))
     if abs(yp - hp) > PROTEIN_G and abs(yp - hp) > PROTEIN_OFF * max(hp, 1):
         return "protein_g"
@@ -159,15 +163,15 @@ def doubt(dish: dict[str, Any], entry: dict[str, Any], whole: dict[str, Any]) ->
         return None
     if entry.get("dismissed") and entry["dismissed"] == numbers_key(entry):
         return None
-    yours = nums(entry)
+    yours, unknown = nums(entry), unknown_in(entry)
     assumed = int(num(entry.get("portions"))) or default_portions(dish)
     suggested = per_portion(whole, assumed)
-    what = off(yours, suggested)
+    what = off(yours, suggested, unknown)
     if what is None:
         return None
     k = fitting_portions(yours, whole, assumed, stated_servings(dish))
     if k != assumed:
-        if off(yours, per_portion(whole, k)) is None:
+        if off(yours, per_portion(whole, k), unknown) is None:
             return None  # right for k portions: just the servings were wrong
         suggested = per_portion(whole, k)
     return {**suggested, "portions": k, "reason": reason(what, yours, per_portion(whole, assumed), k, assumed, dish)}
@@ -317,11 +321,18 @@ class Checker:
     # ---------- one question ----------
 
     async def compare(
-        self, yours: dict[str, Any], key: str | None, dish: dict[str, Any] | None, name: str, portions: int | None = None
+        self,
+        yours: dict[str, Any],
+        key: str | None,
+        dish: dict[str, Any] | None,
+        name: str,
+        portions: int | None = None,
+        unknown: Any = (),
     ) -> dict[str, Any]:
         """Given numbers for one portion against the suggested ones: from the recipe's ingredients for `portions` (else
         what was set for the recipe, else the number of portions the given numbers fit, else what the recipe says), else
-        from the name. The suggestion is returned under `house` (a stable response key)."""
+        from the name. The suggestion is returned under `house` (a stable response key). A protein in `unknown` isn't
+        judged."""
         yours = {k: round(num(yours.get(k)), 1) for k in KEYS}
         entry = (self.book.get(key) if key else None) or {}
         if dish and lines(dish) and key:
@@ -335,8 +346,8 @@ class Checker:
         if not num(yours["kcal"]):
             what = why = "kcal"
         else:  # why, said against the portions the recipe says it makes: "Low for … — may serve 2"
-            what = off(yours, suggested)
-            why = (off(yours, base) or what) if what else None
+            what = off(yours, suggested, unknown)
+            why = (off(yours, base, unknown) or what) if what else None
         return {
             "yours": yours,
             "house": suggested,

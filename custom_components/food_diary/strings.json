@@ -183,6 +183,10 @@
           "name": "Client ID",
           "description": "An id your app makes for this one action (8–64 letters, digits, - or _; a UUID is fine). Sending the same id again returns the first result, with duplicate: true, instead of adding again. The same id with different data is refused."
         },
+        "unknown": {
+          "name": "Unknown",
+          "description": "Macros not known for this food (protein_g, carbs_g, fat_g, fibre_g), as an estimate, a saved meal or a recent food lists them. A macro left out is unknown too; a 0 that is sent is known."
+        },
         "plan_key": {
           "name": "Plan key",
           "description": "Puts a planned meal back (Undo after deleting it): the entry's plan_key as it was (date|meal, e.g. 2026-10-11|dinner, or a planned side's date|meal|side:n). Kept only when it matches the entry's date and meal; a meal plan that follows the diary puts that meal back on the plan."

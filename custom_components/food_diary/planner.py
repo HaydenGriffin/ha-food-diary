@@ -10,7 +10,8 @@ days ahead, each planned breakfast, lunch and dinner becomes a diary entry (sour
 - an estimate from the library dish's ingredients (kept);
 - an estimate from the meal's name (kept under "name:<meal>").
 Partial book numbers (a recipe that prints kcal and protein only) are completed once from an estimate of the dish (see
-macros.py), and every sync also completes any other partial dish in the book.
+macros.py), and every sync also completes any other partial dish in the book. A macro the plan, the library or the book
+doesn't give (left out, or None) stays unknown on the entry (diary.py `unknown`), never a 0 that was given.
 
 A planned meal's `sides` (sources.py) each become an entry too (plan_key "<date>|<meal>|side:<n>", note "With <meal>"),
 numbered the same way, once the meal's own planned entry is there; they follow the plan like the meal does.
@@ -48,7 +49,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later, async_track_time_change
 
 from .const import DOMAIN
-from .diary import Book, canonical_hash, key_in, nums, rev, today
+from .diary import Book, canonical_hash, entry_unknown, key_in, nums, rev, today, unknown_in, values_of
 from .library import find_dish, ingredient_lines, plain_name
 from .macros import complete, partial
 from .sources import (
@@ -336,7 +337,8 @@ class Planner:
             _LOGGER.debug("Not renumbering planned %s on %s: it changed while its numbers were worked out", meal, d)
             return 0
         values, ref = found
-        if e.get("ref") == ref and nums(values) == nums(e.get("per_portion")) and e.get("note", note) == note:
+        same = nums(values) == nums(e.get("per_portion")) and unknown_in(values) == entry_unknown(e)
+        if e.get("ref") == ref and same and e.get("note", note) == note:
             return 0
         return int(self.data.diary.renumber(d, e["id"], values, ref, note, expected_rev=rev(e)) is not None)
 
@@ -348,29 +350,29 @@ class Planner:
         low = base.lower()
         dish = find_dish(slot, dishes)
         if (given := slot.get("nutrition")) and nums(given)["kcal"]:
-            return nums(given), slot.get("ref") or slot.get("dish_id") or (dish["id"] if dish else "")
+            return values_of(given), slot.get("ref") or slot.get("dish_id") or (dish["id"] if dish else "")
         try:
             if dish:
                 did = dish["id"]
                 if (known := self.book.get(did)) and known.get("kcal"):
                     if partial(known):
                         known = await self._completed(did, known, self._dish_estimate(dish))
-                    return nums(known), did
+                    return values_of(known), did
                 out = await est.dish(
                     did, base, ingredient_lines(dish), float(dish.get("servings") or 0), str(dish.get("amounts_per") or "recipe")
                 )
-                return nums(out), did
+                return values_of(out), did
             key = f"name:{low}"
             if (known := self.book.get(key)) and known.get("kcal"):
                 if partial(known):
                     known = await self._completed(key, known, lambda: est.text(base))
-                return nums(known), ""
+                return values_of(known), ""
             before = self.book.version(key)
             out = await est.text(base)
             if self.book.version(key) != before and (known := self.book.get(key)) and known.get("kcal"):
-                return nums(known), ""  # numbers arrived while the AI worked: they win
-            self.book.set(key, {**nums(out), "source": "ai"})
-            return nums(out), ""
+                return values_of(known), ""  # numbers arrived while the AI worked: they win
+            self.book.set(key, {**values_of(out), "source": "ai"})
+            return values_of(out), ""
         except HomeAssistantError as err:
             _LOGGER.debug("No numbers for planned %s: %s", slot["name"], err)
             return None
@@ -401,9 +403,14 @@ class Planner:
                 continue
             if known.get("completed") and nums(known.get("from")) == values:
                 continue
-            if known.get("source") == "recipe" and not known.get("completed") and nums(known) == values:
+            if (
+                known.get("source") == "recipe"
+                and not known.get("completed")
+                and nums(known) == values
+                and unknown_in(known) == unknown_in(given)
+            ):
                 continue
-            self.book.set(dish["id"], {**values, "source": "recipe"})
+            self.book.set(dish["id"], {**values_of(given), "source": "recipe"})
 
     async def _completed(
         self, key: str, known: dict[str, Any], estimate: Callable[[], Awaitable[dict[str, Any]]]
@@ -420,10 +427,12 @@ class Planner:
             _LOGGER.debug("Not completing %s: its numbers changed while the AI worked", key)
             return self.book.get(key) or known
         values = complete(known, est)
+        if values and (left := [k for k in unknown_in(known) if values[k] == nums(known)[k]]):
+            values["unknown"] = left  # what the estimate filled is known now; what it left as it was stays unknown
         return self.book.set(
             key,
             {
-                **(values or nums(known)),
+                **(values or values_of(known)),
                 "source": known.get("source"),
                 "completed": "estimate" if values else "none",
                 "from": nums(known),

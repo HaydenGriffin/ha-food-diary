@@ -68,7 +68,7 @@ Each diary adds one device, `<Person> food diary`, with these entities:
 | Entity | Unit | Notes |
 | --- | --- | --- |
 | `sensor.<person>_food_diary_calories_today` | kcal | Attributes: `goal`, `left`, `logged` (entry count), and `breakfast`, `lunch`, `dinner`, `snack` (kcal per meal). |
-| `sensor.<person>_food_diary_protein_today`, `…_carbs_today`, `…_fat_today`, `…_fibre_today` | g | Attributes: `goal`, `left`. |
+| `sensor.<person>_food_diary_protein_today`, `…_carbs_today`, `…_fat_today`, `…_fibre_today` | g | Attributes: `goal`, `left`, and `incomplete` (how many of today's entries don't know this macro, when any: the state is then at least that much; see [Unknown numbers](#unknown-numbers)). |
 | `sensor.<person>_food_diary_calories_left` | kcal | Calories left against the goal (negative when over). Attribute: `goal`. |
 | `sensor.<person>_food_diary_last_logged` | timestamp | Attributes: `name`, `kcal`, `meal`, `entry_id`, `rev`. |
 | `number.<person>_food_diary_calorie_goal`, `…_protein_goal`, `…_carbs_goal`, `…_fat_goal`, `…_fibre_goal` | kcal / g | Daily goals. Default 2000 kcal, 100 g protein, 230 g carbs, 70 g fat and 30 g fibre. |
@@ -123,6 +123,29 @@ recipe's new numbers). `update_food`, `delete_food` and `set_photo` accept an op
 saw. If the entry has changed since, nothing happens and the call fails with a validation error (translation key
 `conflict`); get the day again and decide.
 
+### Unknown numbers
+
+A macro that wasn't given is not a 0 that was (1.6.0, additive in `api` 2). Calories are always known; protein, carbs,
+fat and fibre can be unknown:
+
+- **Entries** carry `unknown`: a list of the macros (`protein_g`, `carbs_g`, `fat_g`, `fibre_g`) their writer didn't give
+  (left out, or `null`). Their numbers stay `0`, so every sum is still a lower bound. An explicit `0` is known. The key is
+  left out when nothing is unknown, except that an entry with calories and an explicit 0 for protein, carbs and fat (a
+  spirit) stores `"unknown": []`, so it doesn't read as an old entry (below).
+- **Entries from before 1.6.0** have no `unknown`. They are read by one rule: calories and no protein, carbs or fat at all
+  means all four are unknown; anything else is fully known. Stored data isn't changed; an entry gets `unknown` written
+  when something next changes it.
+- **Every writer** sets it: `log_food`, the webhook, voice, the planner, `copy_day`, Undo. A `log_food` call can also
+  send `unknown` itself, as `estimate`, saved meals and `get_recent` foods list it. Copied, saved and planned food brings
+  its source's unknowns along (a saved meal lists a macro any of its foods misses). `update_food` giving a macro takes it
+  off the list; changing portions or grams doesn't. `snapshot` / `restore_snapshot` and `undo_copy` put it back exactly.
+- **Recipe numbers** (`set_dish_nutrition`, a dish library's or a plan's `nutrition`) may leave macros out: those are
+  unknown, kept in the recipe book item's `unknown`, and passed on to the planned entries.
+- **Days** returned by `get_day`, `get_history`, `get_week_review` (each of its `days`) and `log_food`'s answer carry
+  `incomplete`: `{<macro>: <count of entries with calories that don't know it>}`, only the macros some entry misses, and
+  left out when there are none. `totals` are unchanged. Show a total with an `incomplete` count as "at least N g".
+- The [numbers check](#recipe-numbers-check) never calls an unknown protein low.
+
 Background work that waits for the AI (the meal planner, recipe estimates, completing partial recipe numbers) notes what
 it started from and only keeps its answer if that is still the same afterwards. Food logged by hand, an edit, a deletion or
 a new plan in the meantime always wins.
@@ -150,6 +173,7 @@ Some keys appear only when they apply:
 | `edited: true` | The numbers were typed by hand, so the planner and recipe updates leave them alone. |
 | `checked: true` | The entry was confirmed as right. |
 | `client_id` | The `client_id` it was logged with. |
+| `unknown` | The macros not known for it (see [Unknown numbers](#unknown-numbers)). |
 
 `rev` is always there (see [Doing things once, and revisions](#doing-things-once-and-revisions)).
 
@@ -189,12 +213,13 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 | `photo` | string | The `photo` value an `estimate` returned. The picture is kept with the entry. |
 | `image_url` | string | An `https://` product picture. |
 | `client_id` | string | See [Doing things once](#doing-things-once-and-revisions). |
+| `unknown` | list | Macros not known (`protein_g`, `carbs_g`, `fat_g`, `fibre_g`), as `estimate`, a saved meal or a recent food lists them. A macro left out is unknown too; see [Unknown numbers](#unknown-numbers). |
 | `plan_key` | string | Puts a deleted planned entry back (Undo): its `plan_key` as it was (`<date>|<meal>`, or a side's `<date>|<meal>|side:<n>`). Kept only when it matches `date` and `meal`; with it, `source` may be `plan`. A plan that [follows the diary](#a-plan-that-follows-the-diary) puts the meal back on the plan. |
 
 The time-of-day meal is breakfast before 10:30, lunch before 14:30, snack before 17:30, dinner before 21:30, and snack
 after that.
 
-**Response:** `{"entry": <entry>, "entry_id": "…", "date": "<date>", "totals": {<five numbers>}}`. Also fires
+**Response:** `{"entry": <entry>, "entry_id": "…", "date": "<date>", "totals": {<five numbers>}, "incomplete"?: {…}}`. Also fires
 [`food_diary_logged`](#event). A repeated `client_id` adds `"duplicate": true` and returns the entry as it is now; once
 that entry is deleted, `"entry"` is `null` and `"deleted": true` is added. A repeat fires no event.
 
@@ -247,11 +272,12 @@ Fields: `person`, `date`.
 **Response:**
 
 ```json
-{"date": "…", "entries": [<entry>, …], "totals": {…}, "goals": {…}, "left": {…},
- "meals": {"breakfast": 0, "lunch": 0, "dinner": 0, "snack": 0}}
+{"date": "…", "entries": [<entry>, …], "totals": {…}, "incomplete": {"protein_g": 1, "fibre_g": 2}, "goals": {…},
+ "left": {…}, "meals": {"breakfast": 0, "lunch": 0, "dinner": 0, "snack": 0}}
 ```
 
-Entries are sorted by meal, then by time. `left` only includes numbers that have a goal.
+Entries are sorted by meal, then by time. `left` only includes numbers that have a goal. `incomplete` is only there when
+an entry misses a macro ([Unknown numbers](#unknown-numbers)); `totals` and `left` count those as 0.
 
 #### `food_diary.get_history` (response: only)
 
@@ -260,11 +286,12 @@ Fields: `person`, `date` (the last day), `days` (1 to 366, default 7).
 **Response:**
 
 ```json
-{"days": [{"date": "…", "kcal": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fibre_g": 0, "logged": 0}, …],
+{"days": [{"date": "…", "kcal": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fibre_g": 0, "incomplete"?: {…},
+            "logged": 0}, …],
  "goals": {…}}
 ```
 
-Days run from oldest to newest.
+Days run from oldest to newest. `incomplete` as in `get_day`.
 
 #### `food_diary.get_recent` (response: only)
 
@@ -286,6 +313,7 @@ A `<food>` is what you need to log it again:
 - `name`, `meal`, `source`, `ref`, and the five numbers for one portion;
 - `per_100`, `grams` and `unit` when the food has them;
 - `photo`, `image_url`, `barcode` and `image` when they exist;
+- `unknown` when some macros aren't known (send it back with `log_food`);
 - `times`.
 
 #### `food_diary.get_week_review` (response: only)
@@ -301,7 +329,8 @@ Fields: `person`, `date` (the last day, default yesterday), `days` (1 to 31, def
 ```
 
 - **`on_target`:** days at 75 to 105% of the calorie goal.
-- **`protein_days`:** days at 90% or more of the protein goal.
+- **`protein_days`:** days at 90% or more of the protein goal. A day with an unknown protein counts only when what is
+  known already reaches it (its total is a lower bound).
 - **`favourite`**, **`best_day`** and **`last_week_avg_kcal`** can be `null`.
 - **`new_dishes`:** recipes (entries with a `ref`) not eaten in the previous 8 weeks, up to 5.
 
@@ -322,8 +351,11 @@ saved meal.
 **Response:**
 
 ```json
-{"saved": {"id": "…", "name": "…", "meal": "…", "items": ["Porridge", "Banana"], <five numbers>, "at": "…"}}
+{"saved": {"id": "…", "name": "…", "meal": "…", "items": ["Porridge", "Banana"], <five numbers>, "unknown"?: […],
+           "at": "…"}}
 ```
+
+`unknown` lists a macro any of its foods doesn't know (its number is then a lower bound).
 
 #### `food_diary.update_saved_meal` (response: optional)
 
@@ -376,7 +408,7 @@ one entry) can be undone exactly: take a snapshot first, then restore it.
 | `dish_id` | string | Optional. A recipe whose numbers the change may set: its book item and its entries from today on are kept. |
 
 Response: `{"token", "entries": <count kept>, "entry": {id, rev, name, meal, portions, ref, source, edited, kcal…,
-date, per_portion} | null, "dish": <book item> | null}`. The last ten snapshots are kept, until a restart.
+date, per_portion, unknown?} | null, "dish": <book item> | null}`. The last ten snapshots are kept, until a restart.
 
 #### `food_diary.restore_snapshot` (response: optional)
 
@@ -427,6 +459,9 @@ amounts like "50 g", "3 biscuits" or "half the pack" are worked out without the 
 | `barcode` | Like `label`, plus `source: "barcode"`, `barcode`, `product_source` and `image_url?`. |
 | `dish` | `{name, <five numbers>, source: "dish", ref: <dish_id>, nutrition_source}`. Freshly estimated answers also have `note` and `foods`. |
 
+Every kind adds `unknown` when the answer lacks a macro (the AI left it out, or Open Food Facts doesn't list it); its
+number is then 0. Send it on with `log_food`.
+
 For `label` and `barcode`, the five numbers are for the amount eaten. `guessed` is `true` when no amount could be worked
 out, in which case one serving (or 100 g) was assumed.
 
@@ -452,7 +487,8 @@ Lists the dish library's recipes. Field: `person`. Returns an empty list when no
              "check": {…}}]}
 ```
 
-- **The five numbers and `kcal_source`** appear only when the recipe book has numbers for the dish.
+- **The five numbers and `kcal_source`** appear only when the recipe book has numbers for the dish. `unknown` lists the macros
+  those numbers don't have, when any.
 - **`check`** appears only when the dish's numbers look wrong.
 - **`name` and `title`:** if a dish has a non-English `lang` and a different `name_en`, then `name` is the original name
   (what goes on the plan) and `title` is `"<name> (<name_en>)"`. Otherwise both are `name_en`, falling back to `name`.
@@ -461,7 +497,7 @@ Lists the dish library's recipes. Field: `person`. Returns an empty list when no
 
 Returns the recipe book's numbers for one portion of a dish. Field: `dish_id` (**required**).
 
-**Response:** `{<five numbers>, "source", "at", "portions"?, "check"?, "completed"?, "from"?}`, or `{}` if the book
+**Response:** `{<five numbers>, "unknown"?, "source", "at", "portions"?, "check"?, "completed"?, "from"?}`, or `{}` if the book
 doesn't have the dish.
 
 #### `food_diary.set_dish_nutrition` (response: optional)
@@ -472,7 +508,7 @@ Sets a dish's numbers for one portion.
 | --- | --- | --- |
 | `dish_id` | string | **Required.** |
 | `kcal` | number | **Required.** |
-| `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | |
+| `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | One left out is unknown (kept in the book item's `unknown`), not 0. |
 | `source` | `own`, `recipe`, `ai` or `import` | Default `own`. `own` and `import` numbers are never doubted. |
 | `portions` | integer | 1 to 24. How many portions the recipe makes. |
 
@@ -608,6 +644,7 @@ week:
       dish_id: "tray-2"           # optional: the dish library recipe it is (beats matching by name)
       note: "Batch cook"          # optional
       nutrition: {kcal: 593, protein_g: 12.8, carbs_g: 65.9, fat_g: 33.4, fibre_g: 14.5}  # optional: ONE portion
+                                  # (a macro left out or null is unknown, not 0)
       ref: "tray-2"               # optional: the entry's ref for those numbers (default: dish_id)
       sides:                      # optional: what's planned with it, in order (at most 6)
         - "Green salad"           # a name, or an object like a slot's (name, dish_id, nutrition, ref)
@@ -664,7 +701,7 @@ dishes:
       - {amount: "500 g", name: "beef mince"}
       - {amount: "1 tin", name: "kidney beans"}
     nutrition:                     # optional: the recipe's own numbers for ONE portion
-      {kcal: 520, protein_g: 38, carbs_g: 40, fat_g: 21, fibre_g: 9}
+      {kcal: 520, protein_g: 38, carbs_g: 40, fat_g: 21, fibre_g: 9}   # a macro left out or null: unknown, not 0
     image: "/local/recipes/chilli.jpg"   # optional, shown on entries from this recipe
     # optional, passed through by get_dishes for display:
     source: "web"

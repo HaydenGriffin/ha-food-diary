@@ -120,6 +120,15 @@ log_food:
     client_id:
       selector:
         text: {}
+    unknown:
+      selector:
+        select:
+          multiple: true
+          options:
+            - protein_g
+            - carbs_g
+            - fat_g
+            - fibre_g
     plan_key:
       selector:
         text: {}

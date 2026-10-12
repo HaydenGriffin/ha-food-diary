@@ -15,6 +15,12 @@ with its plan_key, restore_snapshot, undo_copy). The planner's own adds and remo
 A planned side (plan_key "<date>|<meal>|side:<n>") is told the same way with `side: n` added; moving one to another meal
 takes it off the plan (deleted) until it's moved back.
 Without such a plan, deleting a planned entry is remembered (`dismissed`) so the plan doesn't put it back.
+
+A number that wasn't given is not a 0 that was. An entry keeps `unknown`, the macros (MACROS: protein, carbs, fat, fibre;
+never kcal) its writer didn't give: stored as 0, so sums stay a lower bound, and left out when there are none. Copied,
+saved and planned food brings its source's unknowns along; new numbers for one take it off the list. Entries from before
+it have no `unknown`: one with calories and no protein, carbs or fat at all reads as calories only (entry_unknown). A day
+says how many entries with calories miss each macro (`incomplete`), next to its unchanged `totals`.
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import DEFAULT_GOALS, DOMAIN, MEALS, NUM
+from .const import DEFAULT_GOALS, DOMAIN, MACROS, MEALS, NUM
 
 PLANNED = ("breakfast", "lunch", "dinner")  # the meals a plan has (sources.PLANNED_MEALS)
 STORE_VERSION = 1  # rev, client_id and the client_id ledger are additions older versions load (and ignore) as they are
@@ -76,6 +82,67 @@ def nums(src: dict[str, Any] | None) -> dict[str, float]:
 
 def totals(entries: list[dict[str, Any]]) -> dict[str, float]:
     return {k: round(float(sum(num(e.get(k)) for e in entries)), 1) for k in NUM}
+
+
+def given(v: Any) -> bool:
+    """Whether a number was given at all (an explicit 0 was; None, "" or something that isn't a number wasn't)."""
+    if v is None or isinstance(v, bool) or v == "":
+        return False
+    try:
+        float(v)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def unknown_in(src: dict[str, Any] | None, also: Any = None) -> list[str]:
+    """The macros a writer's numbers don't give: absent or None, or listed in its own `unknown` (or in `also`): food copied
+    from an entry, an estimate's answer, a recipe book item."""
+    src = src or {}
+    own = src.get("unknown")
+    said = {*(own if isinstance(own, list | tuple) else ()), *(also if isinstance(also, list | tuple) else ())}
+    return [k for k in MACROS if k in said or not given(src.get(k))]
+
+
+def values_of(src: dict[str, Any] | None) -> dict[str, Any]:
+    """One portion's five numbers from `src`, with `unknown` when some weren't given."""
+    u = unknown_in(src)
+    return {**nums(src), **({"unknown": u} if u else {})}
+
+
+def calories_only(e: dict[str, Any]) -> bool:
+    """Calories, and no protein, carbs or fat at all: how an entry from before `unknown` looks when it only had calories."""
+    return num(e.get("kcal")) > 0 and not any(num(e.get(k)) for k in ("protein_g", "carbs_g", "fat_g"))
+
+
+def entry_unknown(e: dict[str, Any]) -> list[str]:
+    """An entry's unknown macros: its `unknown`; for an entry from before it, all four when it has calories only, else none."""
+    if isinstance(e.get("unknown"), list):
+        return [k for k in MACROS if k in e["unknown"]]
+    return list(MACROS) if calories_only(e) else []
+
+
+def set_unknown(e: dict[str, Any], keys: Any) -> None:
+    """Store an entry's unknown macros (after its numbers): left out when there are none, except an empty list on an entry
+    that is calories only by its numbers (a spirit: really no protein, carbs or fat), so it doesn't read as an old one."""
+    keys = [k for k in MACROS if k in (keys or ())]
+    if keys or calories_only(e):
+        e["unknown"] = keys
+    else:
+        e.pop("unknown", None)
+
+
+def incomplete(entries: list[dict[str, Any]]) -> dict[str, int]:
+    """Per macro, how many entries with calories don't know it (the day's total for it is then at least that much); only
+    the macros some entry misses."""
+    c = Counter(k for e in entries if num(e.get("kcal")) > 0 for k in entry_unknown(e))
+    return {k: c[k] for k in MACROS if c[k]}
+
+
+def day_totals(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """A day's totals as history and the week review list them, with `incomplete` when an entry misses a macro."""
+    inc = incomplete(entries)
+    return {**totals(entries), **({"incomplete": inc} if inc else {})}
 
 
 def meal_now() -> str:
@@ -123,6 +190,7 @@ def again(e: dict[str, Any]) -> dict[str, Any]:
         "ref": e.get("ref", ""),
         **(e.get("per_portion") or nums(e)),
         **{k: e[k] for k in ("photo", "image_url", "barcode") if e.get(k)},
+        **({"unknown": u} if (u := entry_unknown(e)) else {}),
     }
     if e.get("per_100"):
         out.update(per_100=e["per_100"], grams=e.get("grams"), unit=e.get("unit", "g"))
@@ -249,10 +317,12 @@ class Diary:
         )
         t = totals(entries)
         goals = {k: v for k, v in self.goals.items() if k in NUM and num(v)}
+        inc = incomplete(entries)
         return {
             "date": d,
             "entries": entries,
             "totals": t,
+            **({"incomplete": inc} if inc else {}),
             "goals": dict(self.goals),
             "left": {k: round(num(goals[k]) - t[k], 1) for k in goals},
             "meals": {m: round(sum(num(e.get("kcal")) for e in entries if e.get("meal") == m), 1) for m in MEALS},
@@ -264,7 +334,7 @@ class Diary:
         for i in range(days - 1, -1, -1):
             d = (last - timedelta(days=i)).isoformat()
             e = self.entries(d)
-            out.append({"date": d, **totals(e), "logged": len(e)})
+            out.append({"date": d, **day_totals(e), "logged": len(e)})
         return {"days": out, "goals": dict(self.goals)}
 
     def recent(self, days: int = 60, limit: int = 30) -> list[dict[str, Any]]:
@@ -303,7 +373,7 @@ class Diary:
         last = date.fromisoformat(end)
         span = [(last - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
         goal, pgoal = num(self.goals.get("kcal")), num(self.goals.get("protein_g"))
-        rows = [{"date": d, **totals(self.entries(d)), "logged": len(self.entries(d))} for d in span]
+        rows = [{"date": d, **day_totals(self.entries(d)), "logged": len(self.entries(d))} for d in span]
         logged = [r for r in rows if r["logged"]]
         on_target = [r for r in logged if goal and goal * 0.75 <= r["kcal"] <= goal * 1.05]
         before = [(last - timedelta(days=days + i)).isoformat() for i in range(days)]
@@ -361,6 +431,7 @@ class Diary:
             "meal": meal,
             "items": [e["name"] for e in items],
             **totals(items),
+            **({"unknown": list(inc)} if (inc := incomplete(items)) else {}),  # a macro any of its foods misses
             "at": dt_util.now().isoformat(timespec="minutes"),
         }
         self.data["saved"] = [x for x in self.saved if x["name"].lower() != clean.lower()] + [s]
@@ -453,15 +524,18 @@ class Diary:
     @staticmethod
     def _new_entry(f: dict[str, Any]) -> dict[str, Any]:
         """A new entry (rev 1) from a log request: label and barcode food is per_100 × grams, anything else its numbers for
-        one portion times the portions."""
+        one portion times the portions. Macros the request doesn't give (or lists in `unknown`) are unknown; its `unknown`
+        is stored as it is until _recount (or set_unknown) sees the entry's numbers."""
         portions = num(f.get("portions")) or 1.0
         per_100 = nums(f["per_100"]) if isinstance(f.get("per_100"), dict) and num(f["per_100"].get("kcal")) else None
         grams = num(f.get("grams"))
         if per_100 and grams:  # from a label or a barcode: what was eaten is per_100 x grams
             per_portion = {k: round(per_100[k] * grams / 100, 2) for k in NUM}
+            unknown = unknown_in(f["per_100"], f.get("unknown"))
             portions = 1.0
         else:
             per_portion = nums(f.get("per_portion") or f)
+            unknown = unknown_in(f.get("per_portion") or f, f.get("unknown"))
         entry: dict[str, Any] = {
             "id": uuid.uuid4().hex[:10],
             "rev": 1,
@@ -472,6 +546,7 @@ class Diary:
             "source": f.get("source") or "manual",
             "ref": str(f.get("ref") or ""),
             "per_portion": per_portion,
+            "unknown": unknown,
         }
         if per_100:
             entry.update(per_100=per_100, grams=round(grams, 1), unit="ml" if f.get("unit") == "ml" else "g")
@@ -501,6 +576,7 @@ class Diary:
             if e["id"] != entry_id:
                 continue
             self._check_rev(e, expected_rev)
+            unknown = entry_unknown(e)
             if num(f.get("grams")) and e.get("per_100"):
                 e["grams"] = round(num(f["grams"]), 1)
                 e["per_portion"] = {k: round(num(e["per_100"].get(k)) * e["grams"] / 100, 2) for k in NUM}
@@ -512,6 +588,8 @@ class Diary:
                 p = num(e.get("portions")) or 1.0
                 e["per_portion"] = {k: round((num(f[k]) if k in f else num(e.get(k))) / p, 2) for k in NUM}
                 e["edited"] = True
+                unknown = [k for k in unknown if not given(f.get(k))]  # a number given for it now: known
+            e["unknown"] = unknown
             was_name, was_meal = e["name"], e["meal"]
             if str(f.get("name") or "").strip():
                 e["name"] = str(f["name"]).strip()[:80]
@@ -559,7 +637,7 @@ class Diary:
         e = self.find(d, entry_id)
         if e is None or (expected_rev is not None and (rev(e) != expected_rev or e.get("edited"))):
             return None
-        e.update(per_portion=nums(values), ref=ref, note=note)
+        e.update(per_portion=nums(values), ref=ref, note=note, unknown=unknown_in(values))
         self._recount(e)
         self._changed_entry(e)
         self.async_changed()
@@ -570,8 +648,10 @@ class Diary:
         changed = 0
         for d in sorted(x for x in self.data["days"] if x >= start):
             for e in self.entries(d):
-                if e.get("ref") == ref and not e.get("edited") and nums(e.get("per_portion")) != nums(values):
-                    e["per_portion"] = nums(values)
+                if e.get("ref") != ref or e.get("edited"):
+                    continue
+                if nums(e.get("per_portion")) != nums(values) or entry_unknown(e) != unknown_in(values):
+                    e.update(per_portion=nums(values), unknown=unknown_in(values))
                     self._recount(e)
                     self._changed_entry(e)
                     changed += 1
@@ -647,6 +727,7 @@ class Diary:
         )
         if isinstance(e.get("per_100"), dict):
             entry.update({k: copy.deepcopy(e[k]) for k in ("per_100", "grams", "unit") if k in e})
+        set_unknown(entry, entry_unknown(e))
         return entry
 
     def uncopy(self, token: str) -> bool:
@@ -738,6 +819,7 @@ class Diary:
     def _recount(e: dict[str, Any]) -> None:
         p = num(e.get("portions")) or 1.0
         e.update({k: round(num(e["per_portion"].get(k)) * p, 1) for k in NUM})
+        set_unknown(e, entry_unknown(e))
 
 
 class Book:

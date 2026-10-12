@@ -9,6 +9,9 @@ API_VERSION = 2
 
 # Every entry, portion and goal carries these five numbers.
 NUM = ("kcal", "protein_g", "carbs_g", "fat_g", "fibre_g")
+# The ones that can be unknown (not given when the food was logged; kcal always is). Additive in api 2: an entry's
+# `unknown` lists them, a day's `incomplete` counts them (diary.py).
+MACROS = ("protein_g", "carbs_g", "fat_g", "fibre_g")
 MEALS = ("breakfast", "lunch", "dinner", "snack")
 # Where an entry's numbers came from. "plan" is only ever written by the meal planner; "import" is food brought over from
 # another app (its numbers are what the person logged there).

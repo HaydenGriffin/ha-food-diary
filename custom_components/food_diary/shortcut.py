@@ -10,8 +10,8 @@
   nothing new; the same id with a different body is refused
 
 It works the food out, logs it at once and answers with the numbers (so a shortcut can, say, write them to a health app):
-  {"ok": true, "status": "logged", "name", "kcal", "protein_g", "carbs_g", "fat_g", "fibre_g", "grams", "unit", "meal",
-   "entry_id", "title", "message"}
+  {"ok": true, "status": "logged", "name", "kcal", "protein_g", "carbs_g", "fat_g", "fibre_g", "unknown"?, "grams", "unit",
+   "meal", "entry_id", "title", "message"}     ("unknown": the macros the food came without, when there are any; they read 0)
   {"ok": true, "status": "deleted", "entry_id", "date", "duplicate": true, "deleted": true, "message"}
                                                      a repeated client_id whose entry has since been removed (not re-logged)
   {"ok": false, "status": "need_label", "message"}   barcode not known: photograph the label (send it back with the barcode)
@@ -140,6 +140,7 @@ def _logged(diary: Diary, record: dict[str, Any], repeat: bool) -> dict[str, Any
         "rev": e.get("rev", 1),
         "date": day,
         **{k: e[k] for k in NUM},
+        **({"unknown": e["unknown"]} if e.get("unknown") else {}),
         "grams": e.get("grams") or 0,
         "unit": e.get("unit", "g"),
         "guessed": bool(record.get("guessed")),
