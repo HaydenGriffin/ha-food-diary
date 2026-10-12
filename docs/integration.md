@@ -189,7 +189,7 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 | `photo` | string | The `photo` value an `estimate` returned. The picture is kept with the entry. |
 | `image_url` | string | An `https://` product picture. |
 | `client_id` | string | See [Doing things once](#doing-things-once-and-revisions). |
-| `plan_key` | string | Puts a deleted planned entry back (Undo): its `plan_key` as it was. Kept only when it matches `date` and `meal`; with it, `source` may be `plan`. A plan that [follows the diary](#a-plan-that-follows-the-diary) puts the meal back on the plan. |
+| `plan_key` | string | Puts a deleted planned entry back (Undo): its `plan_key` as it was (`<date>|<meal>`, or a side's `<date>|<meal>|side:<n>`). Kept only when it matches `date` and `meal`; with it, `source` may be `plan`. A plan that [follows the diary](#a-plan-that-follows-the-diary) puts the meal back on the plan. |
 
 The time-of-day meal is breakfast before 10:30, lunch before 14:30, snack before 17:30, dinner before 21:30, and snack
 after that.
@@ -609,6 +609,9 @@ week:
       note: "Batch cook"          # optional
       nutrition: {kcal: 593, protein_g: 12.8, carbs_g: 65.9, fat_g: 33.4, fibre_g: 14.5}  # optional: ONE portion
       ref: "tray-2"               # optional: the entry's ref for those numbers (default: dish_id)
+      sides:                      # optional: what's planned with it, in order (at most 6)
+        - "Green salad"           # a name, or an object like a slot's (name, dish_id, nutrition, ref)
+        - {name: "Garlic bread", dish_id: "bread-1"}
 ```
 
 A sensor that doesn't exist, or whose state is `unavailable`, means the plan isn't available: nothing is added or removed
@@ -619,6 +622,11 @@ How the plan is applied:
 - **Past days** are ignored.
 - **Planned meals:** each non-empty `breakfast`, `lunch` and `dinner` becomes one portion in the diary, with
   `source: plan`, `plan_key: "<date>|<meal>"` and `note: "From the meal plan"`.
+- **Sides:** each of a meal's `sides` becomes its own entry too, once the meal's own planned entry is there, with
+  `plan_key: "<date>|<meal>|side:<n>"` (n = its position) and `note: "With <meal>"`. Its numbers come the same way as a
+  meal's. When something was logged in that meal before the plan (so the plan added nothing), no sides are added either;
+  a side planned later, once the meal's entry is there, is added then. A side taken off the plan goes (unless its numbers
+  were edited); one that moves up or down the list keeps its entry.
 - **Leftovers:** a `Leftovers:` prefix is ignored when matching a meal to a dish, so leftovers count as the same dish.
 - **Where the numbers come from**, first match wins:
   1. the plan's own `nutrition` for that meal (its `ref`, else its `dish_id`, becomes the entry's ref);
@@ -730,6 +738,10 @@ plan stay in step both ways. Each of the person's own changes to a planned entry
 
 Every change has `date`, `meal` (the plan meal it's in now) and `name` (its name now). Past days are passed on too. The
 planner's own adds and removals never are.
+
+A change to a planned **side** has `side` too (its position in the slot's `sides`, with `meal` the meal it's a side of).
+A side is never `moved`: moved to another meal it is `deleted` (and `restored` when moved back). A plan that offers
+`sides` must read `side`, or it would take a side's delete for the meal's.
 
 - **Change `days()` at once**, then write the change to your plan. The planner reads the plan straight after; until it says
   the new name, a renamed entry would look like a plan change.

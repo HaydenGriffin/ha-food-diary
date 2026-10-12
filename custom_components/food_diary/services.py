@@ -55,7 +55,9 @@ LOG_SCHEMA = vol.Schema(
         vol.Optional("photo"): cv.string,
         vol.Optional("image_url"): cv.string,
         vol.Optional("client_id"): CLIENT_ID,
-        vol.Optional("plan_key"): vol.All(cv.string, vol.Match(r"^\d{4}-\d{2}-\d{2}\|(breakfast|lunch|dinner)$")),
+        vol.Optional("plan_key"): vol.All(
+            cv.string, vol.Match(r"^\d{4}-\d{2}-\d{2}\|(breakfast|lunch|dinner)(\|side:\d{1,2})?$")
+        ),
     }
 )
 UPDATE_SCHEMA = vol.Schema(

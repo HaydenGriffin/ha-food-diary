@@ -12,6 +12,9 @@ days ahead, each planned breakfast, lunch and dinner becomes a diary entry (sour
 Partial book numbers (a recipe that prints kcal and protein only) are completed once from an estimate of the dish (see
 macros.py), and every sync also completes any other partial dish in the book.
 
+A planned meal's `sides` (sources.py) each become an entry too (plan_key "<date>|<meal>|side:<n>", note "With <meal>"),
+numbered the same way, once the meal's own planned entry is there; they follow the plan like the meal does.
+
 Then:
 - the plan changes → the entry is replaced; the slot empties → it's removed (unless its numbers were edited);
 - the book's numbers for a planned meal change → its entry takes them (its portions stay), unless its numbers were edited;
@@ -45,7 +48,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later, async_track_time_change
 
 from .const import DOMAIN
-from .diary import Book, canonical_hash, nums, rev, today
+from .diary import Book, canonical_hash, key_in, nums, rev, today
 from .library import find_dish, ingredient_lines, plain_name
 from .macros import complete, partial
 from .sources import (
@@ -191,6 +194,10 @@ class Planner:
         )
 
     async def _slot(self, d: str, meal: str, slot: dict[str, Any] | None, dishes: list[dict[str, Any]]) -> int:
+        changed = await self._main(d, meal, slot, dishes)
+        return changed + await self._sides(d, meal, slot, dishes)
+
+    async def _main(self, d: str, meal: str, slot: dict[str, Any] | None, dishes: list[dict[str, Any]]) -> int:
         diary = self.data.diary
         pkey = f"{d}|{meal}"
         mine = [e for e in diary.entries(d) if e.get("plan_key") == pkey]
@@ -239,6 +246,74 @@ class Planner:
         )
         return changed + 1
 
+    async def _sides(self, d: str, meal: str, slot: dict[str, Any] | None, dishes: list[dict[str, Any]]) -> int:
+        """The slot's planned sides, each its own entry (plan_key "<date>|<meal>|side:<n>", note "With <meal>"), once the
+        meal's own planned entry is there: none when something was logged in that meal first (the plan added nothing), and
+        a side planned later is added then. A side already in the meal (same name) keeps its entry (re-keyed when the
+        sides move up or down); one she logged by hand becomes the planned one (a plan that follows); one taken off the
+        plan goes (unless its numbers were edited, as with the main)."""
+        diary = self.data.diary
+        pkey = f"{d}|{meal}"
+        mine = [e for e in diary.entries(d) if key_in(str(e.get("plan_key") or ""), d, meal) and e.get("plan_key") != pkey]
+        want = (slot or {}).get("sides") or []
+        main = next((e for e in diary.entries(d) if e.get("plan_key") == pkey), None)
+        if not want or main is None:
+            gone = [e for e in mine if not e.get("edited") or e.get("source") != "plan"]
+            for e in gone:
+                self._let_go(d, e)
+            return len(gone)
+        free, placed = list(mine), {}
+        for n, side in enumerate(want):
+            low = side["name"].lower()
+            hit = next((e for e in free if e.get("plan_key") == f"{pkey}|side:{n}" and e["name"].lower() == low), None) or next(
+                (e for e in free if e["name"].lower() == low), None
+            )
+            if hit:
+                free.remove(hit)
+                placed[n] = hit
+        changed = 0
+        for e in free:
+            if not e.get("edited") or e.get("source") != "plan":
+                self._let_go(d, e)
+                changed += 1
+        note = f"With {slot['name']}" if slot else PLAN_NOTE
+        for n, side in enumerate(want):
+            skey = f"{pkey}|side:{n}"
+            if (e := placed.get(n)) is not None:
+                if e.get("plan_key") != skey:
+                    diary.link(d, e["id"], skey)
+                    changed += 1
+                changed += await self._refresh(d, meal, diary.find(d, e["id"]) or e, side, dishes, note)
+                continue
+            if diary.dismissed(skey, side["name"]):
+                continue
+            logged = [e for e in diary.entries(d) if e.get("meal") == meal and not e.get("plan_key")]
+            if follows(self.plan) and (hers := next((e for e in logged if e["name"].lower() == side["name"].lower()), None)):
+                diary.link(d, hers["id"], skey)
+                changed += 1
+                continue
+            before = self._slot_state(d, meal)
+            found = await self._nutrition(side, dishes)
+            if not found or self._slot_state(d, meal) != before:
+                continue
+            values, ref = found
+            diary.add(
+                d,
+                {
+                    "name": side["name"],
+                    "meal": meal,
+                    "source": "plan",
+                    "ref": ref,
+                    "plan_key": skey,
+                    "portions": 1,
+                    "note": note,
+                    **values,
+                },
+                planned=True,
+            )
+            changed += 1
+        return changed
+
     def _let_go(self, d: str, e: dict[str, Any]) -> None:
         """An entry the planner made goes; one the person logged (and the plan took) stays, just hers."""
         if e.get("source") == "plan":
@@ -246,7 +321,9 @@ class Planner:
         else:
             self.data.diary.unlink(d, e["id"])
 
-    async def _refresh(self, d: str, meal: str, e: dict[str, Any], slot: dict[str, Any], dishes: list[dict[str, Any]]) -> int:
+    async def _refresh(
+        self, d: str, meal: str, e: dict[str, Any], slot: dict[str, Any], dishes: list[dict[str, Any]], note: str = PLAN_NOTE
+    ) -> int:
         """A planned entry takes the book's current numbers (completed, or newly arrived); never one whose numbers were
         edited, one the person logged herself, nor one that changed (or whose slot did) while the numbers were worked out."""
         if e.get("edited") or e.get("source") != "plan":
@@ -259,9 +336,9 @@ class Planner:
             _LOGGER.debug("Not renumbering planned %s on %s: it changed while its numbers were worked out", meal, d)
             return 0
         values, ref = found
-        if e.get("ref") == ref and nums(values) == nums(e.get("per_portion")):
+        if e.get("ref") == ref and nums(values) == nums(e.get("per_portion")) and e.get("note", note) == note:
             return 0
-        return int(self.data.diary.renumber(d, e["id"], values, ref, PLAN_NOTE, expected_rev=rev(e)) is not None)
+        return int(self.data.diary.renumber(d, e["id"], values, ref, note, expected_rev=rev(e)) is not None)
 
     async def _nutrition(self, slot: dict[str, Any], dishes: list[dict[str, Any]]) -> Nutrition | None:
         """One portion: the plan's own numbers, else the book's, else worked out from the dish's ingredients (kept), else

@@ -16,7 +16,9 @@ A plan may also follow the diary, by having one more method:
 
 It's told each of the person's own changes to a planned entry as it happens: `{"action": "deleted" | "renamed" | "moved" |
 "restored", "date", "meal", "name"}` (the plan meal it's in now, and its name now), plus `previous` (the name before) for
-renamed and moved, and `from` (the meal it left) for moved. A provider that follows changes what `days()` returns at once
+renamed and moved, and `from` (the meal it left) for moved. A change to one of a meal's planned sides (below) also has
+`side` (its position in the slot's `sides`; never "moved": a side moved to another meal is "deleted" from its own), so a
+plan that offers sides must read `side`. A provider that follows changes what `days()` returns at once
 (the planner reads it straight after) and writes the change to its own plan. Then a deleted planned entry is taken off the
 plan rather than remembered as dismissed (diary.py, planner.py).
 
@@ -25,7 +27,10 @@ arguments, in the event loop) whenever either may have changed, and returns the 
 
 A dish is a dict with a unique, stable `id` (the shapes are in docs/integration.md, "Dish library sensor contract"). A plan
 day is `{"date": "YYYY-MM-DD", "breakfast": slot, "lunch": slot, "dinner": slot}`; a slot is the meal's name, or
-`{"name", "note"?, "dish_id"?, "nutrition"?, "ref"?}`, or None / "" for nothing planned. A meal left out of a provider's day
+`{"name", "note"?, "dish_id"?, "nutrition"?, "ref"?, "sides"?}`, or None / "" for nothing planned. `sides` (optional) are
+what's planned with that meal, in order: each a name or `{"name", "dish_id"?, "nutrition"?, "ref"?}`, at most MAX_SIDES; the
+planner adds each as its own entry (plan_key "<date>|<meal>|side:<n>") once the meal's own planned entry is there.
+A meal left out of a provider's day
 is "not known": the planner leaves that slot as it is (the sensor provider treats a missing meal as nothing planned, as its
 contract always has).
 
@@ -55,6 +60,7 @@ from .const import CONF_DISHES_SENSOR, CONF_PLAN_SENSOR, CONF_SOURCE, DOMAIN
 
 PLANNED_MEALS = ("breakfast", "lunch", "dinner")
 SLOT_TEXT = ("note", "dish_id", "ref")
+MAX_SIDES = 6
 REGISTRY = f"{DOMAIN}_sources"
 
 
@@ -147,7 +153,19 @@ def plan_slot(raw: Any) -> dict[str, Any] | None:
             slot[key] = str(raw[key]).strip()
     if isinstance(raw.get("nutrition"), dict):
         slot["nutrition"] = raw["nutrition"]
+    if isinstance(raw.get("sides"), list) and (sides := plan_sides(raw["sides"])):
+        slot["sides"] = sides
     return slot
+
+
+def plan_sides(raw: list[Any]) -> list[dict[str, Any]]:
+    """A slot's sides as slots of their own (no sides of sides), blanks and repeated names dropped, at most MAX_SIDES."""
+    out: list[dict[str, Any]] = []
+    for x in raw:
+        side = plan_slot({k: v for k, v in x.items() if k != "sides"} if isinstance(x, dict) else x)
+        if side and side["name"].lower() not in {s["name"].lower() for s in out}:
+            out.append(side)
+    return out[:MAX_SIDES]
 
 
 def read_plan(plan: MealPlan | None) -> list[dict[str, Any]] | None:

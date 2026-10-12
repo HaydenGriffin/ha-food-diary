@@ -185,7 +185,7 @@
         },
         "plan_key": {
           "name": "Plan key",
-          "description": "Puts a planned meal back (Undo after deleting it): the entry's plan_key as it was (date|meal, e.g. 2026-10-11|dinner). Kept only when it matches the entry's date and meal; a meal plan that follows the diary puts that meal back on the plan."
+          "description": "Puts a planned meal back (Undo after deleting it): the entry's plan_key as it was (date|meal, e.g. 2026-10-11|dinner, or a planned side's date|meal|side:n). Kept only when it matches the entry's date and meal; a meal plan that follows the diary puts that meal back on the plan."
         }
       }
     },

@@ -12,6 +12,8 @@ outlives the entry, so a retried or doubled request returns the first result ins
 A meal plan can follow the diary (sources.py, `follow`): then the person's own changes to a planned entry (one with a
 `plan_key` "<date>|<meal>") are told to it as they happen: deleted, renamed, moved to another meal, or put back (a re-log
 with its plan_key, restore_snapshot, undo_copy). The planner's own adds and removals are never told (they follow the plan).
+A planned side (plan_key "<date>|<meal>|side:<n>") is told the same way with `side: n` added; moving one to another meal
+takes it off the plan (deleted) until it's moved back.
 Without such a plan, deleting a planned entry is remembered (`dismissed`) so the plan doesn't put it back.
 """
 
@@ -40,6 +42,24 @@ STORE_VERSION = 1  # rev, client_id and the client_id ledger are additions older
 KEPT = ("estimate", "portions", "dismissed")  # a dish's book entry: kept through new numbers (see checks.py)
 NOT_COPIED = ("id", "at", "rev", "client_id", "plan_key", "plan_was", "edited")  # a copied entry is a new entry
 _LOGGER = logging.getLogger(__name__)
+
+
+def key_meal(plan_key: Any) -> str:
+    """The meal of a plan_key: "<date>|<meal>" or a side's "<date>|<meal>|side:<n>" ("" for none)."""
+    return str(plan_key or "").split("|")[1] if str(plan_key or "").count("|") >= 1 else ""
+
+
+def key_side(plan_key: Any) -> int | None:
+    """n of a side's plan_key "<date>|<meal>|side:<n>", else None."""
+    parts = str(plan_key or "").split("|")
+    if len(parts) == 3 and parts[2].startswith("side:") and parts[2][5:].isdigit():
+        return int(parts[2][5:])
+    return None
+
+
+def key_in(plan_key: str, d: str, meal: str) -> bool:
+    """Whether a plan_key belongs to that day and meal (the main's, or one of its sides')."""
+    return plan_key == f"{d}|{meal}" or (plan_key.startswith(f"{d}|{meal}|") and key_side(plan_key) is not None)
 
 
 def num(v: Any) -> float:
@@ -154,15 +174,21 @@ class Diary:
 
     @staticmethod
     def plan_meal(e: dict[str, Any]) -> str:
-        """The plan meal a planned entry stands for ("" for none)."""
-        return str(e.get("plan_key") or "").partition("|")[2]
+        """The plan meal a planned entry stands for ("" for none); a side's is its main's meal."""
+        return key_meal(e.get("plan_key"))
+
+    @staticmethod
+    def plan_side(e: dict[str, Any]) -> dict[str, int]:
+        """{"side": n} for a planned side's entry (plan_key "<date>|<meal>|side:<n>"), else {}: added to what the plan is told."""
+        n = key_side(e.get("plan_key"))
+        return {} if n is None else {"side": n}
 
     def _put_back(self, d: str, e: dict[str, Any]) -> None:
         """A planned entry is back (a re-log of it, a restore): it isn't dismissed any more, and a following plan is told."""
         if not e.get("plan_key"):
             return
         self.data.get("dismissed", {}).pop(e["plan_key"], None)
-        self._tell_plan("restored", d, self.plan_meal(e), e["name"])
+        self._tell_plan("restored", d, self.plan_meal(e), e["name"], **self.plan_side(e))
 
     def link(self, d: str, entry_id: str, plan_key: str) -> dict[str, Any] | None:
         """The planner takes an entry the person logged as the plan's for that meal (the plan was set to it)."""
@@ -410,7 +436,7 @@ class Diary:
         (Undo after a delete): kept only when it matches the entry's day and meal."""
         entry = self._new_entry(f)
         self._recount(entry)
-        if not planned and entry.get("plan_key") and entry["plan_key"] != f"{d}|{entry['meal']}":
+        if not planned and entry.get("plan_key") and not key_in(entry["plan_key"], d, entry["meal"]):
             entry.pop("plan_key")
             if entry["source"] == "plan":
                 entry["source"] = "again"  # planned food put back where the plan isn't: just food she had
@@ -509,20 +535,20 @@ class Diary:
         if self.plan_follower is None:
             return
         if not e.get("plan_key"):
-            if e["meal"] != was_meal and e.get("plan_was") == f"{d}|{e['meal']}":  # moved back from a snack (Undo)
+            if e["meal"] != was_meal and e.get("plan_was") and key_in(e["plan_was"], d, e["meal"]):  # moved back (Undo)
                 e["plan_key"] = e.pop("plan_was")
-                self._tell_plan("restored", d, e["meal"], e["name"])
+                self._tell_plan("restored", d, e["meal"], e["name"], **self.plan_side(e))
             return
-        old = self.plan_meal(e)
+        old, side = self.plan_meal(e), self.plan_side(e)
         if e["meal"] != was_meal:
-            if e["meal"] in PLANNED:
+            if e["meal"] in PLANNED and not side:
                 e["plan_key"] = f"{d}|{e['meal']}"
                 self._tell_plan("moved", d, e["meal"], e["name"], **{"from": old, "previous": was_name})
-            else:
+            else:  # to a snack, or a side to another meal: off the plan, just hers until it's moved back
                 e["plan_was"] = e.pop("plan_key")
-                self._tell_plan("deleted", d, old, was_name)
+                self._tell_plan("deleted", d, old, was_name, **side)
         elif e["name"] != was_name:
-            self._tell_plan("renamed", d, old, e["name"], previous=was_name)
+            self._tell_plan("renamed", d, old, e["name"], previous=was_name, **side)
 
     def renumber(
         self, d: str, entry_id: str, values: dict[str, Any], ref: str, note: str, expected_rev: int | None = None
@@ -562,7 +588,7 @@ class Diary:
                 self._check_rev(e, expected_rev)
                 if dismiss and e.get("plan_key"):
                     if self.plan_follower is not None:
-                        self._tell_plan("deleted", d, self.plan_meal(e), e["name"])
+                        self._tell_plan("deleted", d, self.plan_meal(e), e["name"], **self.plan_side(e))
                     else:
                         self.data.setdefault("dismissed", {})[e["plan_key"]] = e["name"].lower()
                 entries.remove(e)
