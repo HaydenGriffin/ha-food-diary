@@ -1,7 +1,7 @@
 """A number that wasn't given is not a 0 that was (1.6.0). An entry lists the macros its writer didn't give in `unknown`
 (stored as 0, so totals stay a lower bound), copies, saved meals and the plan bring them along, an edit that gives one takes
 it off, and a day counts them in `incomplete`. Entries from before have no `unknown`: calories only reads as all four
-unknown. Each test here failed before 1.6.0 (no `unknown`, no `incomplete`)."""
+unknown. Each test here failed before 1.6.0 (no `unknown`, no `incomplete`); putting one back to unknown, before 1.6.1."""
 
 from __future__ import annotations
 
@@ -104,6 +104,25 @@ async def test_update_that_gives_a_macro_clears_it(hass: HomeAssistant, setup):
     assert e["unknown"] == ["carbs_g"] and e["fibre_g"] == 8  # an explicit 0 is known too
     e = (await call(hass, "update_food", {"entry_id": e["id"], "carbs_g": 40}))["entry"]
     assert "unknown" not in e and "incomplete" not in await call(hass, "get_day")
+
+
+async def test_update_can_put_a_macro_back_to_unknown(hass: HomeAssistant, setup):
+    """1.6.1: Undo after a fix sends the numbers as they were and lists the ones that were unknown; they read 0."""
+    e = await log(hass, name="Stew", kcal=400, protein_g=20)
+    fixed = (await call(hass, "update_food", {"entry_id": e["id"], "carbs_g": 30, "fat_g": 12, "fibre_g": 5}))["entry"]
+    assert "unknown" not in fixed
+    was = fixed["rev"]
+    undo = {"kcal": 400, "protein_g": 20, "carbs_g": 30, "fat_g": 0, "fibre_g": 0, "unknown": ["carbs_g", "fat_g", "fibre_g"]}
+    back = (await call(hass, "update_food", {"entry_id": e["id"], "expected_rev": was, **undo}))["entry"]
+    assert back["unknown"] == ["carbs_g", "fat_g", "fibre_g"]  # listed wins over a number sent for it
+    assert (back["kcal"], back["protein_g"], back["carbs_g"], back["fat_g"]) == (400, 20, 0, 0)
+    assert back["per_portion"]["carbs_g"] == 0 and back["rev"] == was + 1
+    assert (await call(hass, "get_day"))["incomplete"] == {"carbs_g": 1, "fat_g": 1, "fibre_g": 1}
+    one = (await call(hass, "update_food", {"entry_id": e["id"], "unknown": ["protein_g"]}))["entry"]
+    assert one["unknown"] == ALL and one["protein_g"] == 0 and one["kcal"] == 400  # alone: just that one, the rest kept
+    assert (await call(hass, "update_food", {"entry_id": e["id"], "unknown": []}))["entry"]["unknown"] == ALL
+    with pytest.raises((vol.Invalid, ServiceValidationError)):  # calories are always known
+        await call(hass, "update_food", {"entry_id": e["id"], "unknown": ["kcal"]})
 
 
 async def test_legacy_entries_read_by_one_rule(hass: HomeAssistant, setup):

@@ -214,6 +214,15 @@ update_food:
     checked:
       selector:
         boolean: {}
+    unknown:
+      selector:
+        select:
+          multiple: true
+          options:
+            - protein_g
+            - carbs_g
+            - fat_g
+            - fibre_g
     expected_rev:
       selector:
         number:

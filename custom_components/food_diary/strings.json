@@ -249,6 +249,10 @@
           "name": "Checked",
           "description": "Mark the entry as confirmed right (for example, a likely double entry that isn't one). False clears it."
         },
+        "unknown": {
+          "name": "Unknown",
+          "description": "Macros to mark as not known again (protein_g, carbs_g, fat_g, fibre_g), stored as 0: Undo after a fix that gave them. Wins over a number sent for the same macro."
+        },
         "expected_rev": {
           "name": "Expected revision",
           "description": "The entry's rev as you last saw it. If the entry has changed since, nothing changes and the action fails with a conflict."

@@ -584,11 +584,12 @@ class Diary:
                 e.pop("edited", None)
             if num(f.get("portions")):
                 e["portions"] = num(f["portions"])
-            if any(k in f for k in NUM):  # the person's own numbers for the whole entry
+            said = [k for k in MACROS if k in (f.get("unknown") or ())]  # put back to unknown (Undo after a fix): 0
+            if any(k in f for k in NUM) or said:  # the person's own numbers for the whole entry
                 p = num(e.get("portions")) or 1.0
-                e["per_portion"] = {k: round((num(f[k]) if k in f else num(e.get(k))) / p, 2) for k in NUM}
+                e["per_portion"] = {k: 0.0 if k in said else round((num(f[k]) if k in f else num(e.get(k))) / p, 2) for k in NUM}
                 e["edited"] = True
-                unknown = [k for k in unknown if not given(f.get(k))]  # a number given for it now: known
+                unknown = [k for k in MACROS if k in said or (k in unknown and not given(f.get(k)))]  # given now: known
             e["unknown"] = unknown
             was_name, was_meal = e["name"], e["meal"]
             if str(f.get("name") or "").strip():

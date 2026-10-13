@@ -6,7 +6,8 @@ Creating services (log_food, copy_day) take an optional `client_id`: the same id
 `expected_rev`: the entry's `rev` as the caller last saw it; when it has changed since, the call fails with `conflict`.
 
 A macro left out of log_food (or listed in its `unknown`, as an estimate, a saved meal or a recent food lists it) is
-unknown, not 0: the entry keeps it in `unknown`, and get_day / get_history / get_week_review count it in `incomplete`."""
+unknown, not 0: the entry keeps it in `unknown`, and get_day / get_history / get_week_review count it in `incomplete`.
+update_food giving a macro makes it known; listing it in update_food's `unknown` makes it unknown again (Undo)."""
 
 from __future__ import annotations
 
@@ -76,6 +77,7 @@ UPDATE_SCHEMA = vol.Schema(
         vol.Optional("meal"): vol.In(MEALS),
         vol.Optional("name"): cv.string,
         vol.Optional("checked"): cv.boolean,
+        vol.Optional("unknown"): UNKNOWN,
         vol.Optional("expected_rev"): EXPECTED_REV,
     }
 )

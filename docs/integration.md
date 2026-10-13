@@ -138,7 +138,8 @@ fat and fibre can be unknown:
 - **Every writer** sets it: `log_food`, the webhook, voice, the planner, `copy_day`, Undo. A `log_food` call can also
   send `unknown` itself, as `estimate`, saved meals and `get_recent` foods list it. Copied, saved and planned food brings
   its source's unknowns along (a saved meal lists a macro any of its foods misses). `update_food` giving a macro takes it
-  off the list; changing portions or grams doesn't. `snapshot` / `restore_snapshot` and `undo_copy` put it back exactly.
+  off the list; changing portions or grams doesn't. `update_food` with `unknown` (1.6.1) puts macros back on it, stored
+  as `0`: an app's Undo after a fix sends the numbers as they were and lists the ones that were unknown. `snapshot` / `restore_snapshot` and `undo_copy` put it back exactly.
 - **Recipe numbers** (`set_dish_nutrition`, a dish library's or a plan's `nutrition`) may leave macros out: those are
   unknown, kept in the recipe book item's `unknown`, and passed on to the planned entries.
 - **Days** returned by `get_day`, `get_history`, `get_week_review` (each of its `days`) and `log_food`'s answer carry
@@ -238,6 +239,7 @@ Changes an existing entry.
 | `name` | string | |
 | `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | Your own numbers for the **whole** entry. Sets `edited`. |
 | `checked` | boolean | `true` marks the entry as confirmed right. `false` clears it. |
+| `unknown` | list | Macros (`protein_g`, `carbs_g`, `fat_g`, `fibre_g`) that aren't known after all: stored as `0` and listed in the entry's [`unknown`](#unknown-numbers). Wins over a number sent for the same macro. Sets `edited`. Since 1.6.1. |
 | `expected_rev` | integer | Fail with `conflict` if the entry's `rev` isn't this. |
 
 **Response:** `{"entry": <entry>}`.
