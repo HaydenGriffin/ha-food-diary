@@ -11,8 +11,10 @@ numbers and ingredients:
   When another number of portions explains the calories, that's the suggestion ("may serve 2"); when it explains all of
   them, the numbers are right for it and there's no doubt.
 A protein that isn't known (the numbers came without it: `unknown`) is never judged, only the calories.
-The person's own numbers ("own", or "import": logged in another app) are never doubted,
-nor numbers confirmed as right (`dismissed`, until they change). Every
+The person's own numbers ("own", or "import": logged in another app) are never doubted while the recipe's ingredients are
+the ones they were given for (`typed_for`: the ingredients key the check first saw them with); once the ingredients
+change, they are judged like any other (kept, never overwritten: the doubt only asks). Numbers confirmed as right
+(`dismissed`, until they change) are never doubted. Every
 check is remembered (`checked_for`), so each dish is only looked at again when its numbers, ingredients or portions change.
 """
 
@@ -157,9 +159,14 @@ def reason(
     return f"{head} for its ingredients{serve}"[:80]
 
 
+def own_still_fit(entry: dict[str, Any], dish: dict[str, Any]) -> bool:
+    """The person's own numbers, for the ingredients they were given for (or not seen with any yet)."""
+    return entry.get("source") in TRUSTED and entry.get("typed_for") in (None, ingredients_key(dish))
+
+
 def doubt(dish: dict[str, Any], entry: dict[str, Any], whole: dict[str, Any]) -> dict[str, Any] | None:
     """The suggested numbers when a recipe's numbers look wrong for its ingredients, else None."""
-    if entry.get("source") in TRUSTED or not num(entry.get("kcal")) or not num(whole.get("kcal")):
+    if own_still_fit(entry, dish) or not num(entry.get("kcal")) or not num(whole.get("kcal")):
         return None
     if entry.get("dismissed") and entry["dismissed"] == numbers_key(entry):
         return None
@@ -290,9 +297,12 @@ class Checker:
                 entry = self.book.get(key)
                 if not entry or not num(entry.get("kcal")) or not lines(dish):
                     continue
-                if entry.get("source") in TRUSTED:
-                    if entry.get("check"):
-                        self.book.patch(key, {"check": None})
+                if own_still_fit(entry, dish):
+                    changes = {"check": None} if entry.get("check") else {}
+                    if entry.get("typed_for") is None:  # the ingredients her numbers are for (new numbers drop it)
+                        changes["typed_for"] = ingredients_key(dish)
+                    if changes:
+                        self.book.patch(key, changes)
                     continue
                 stamp = self._checked_for(entry, dish)
                 if entry.get("checked_for") == stamp:

@@ -158,6 +158,32 @@ async def test_own_numbers_lose_their_doubt(hass: HomeAssistant, setup, ai_calls
     assert await c.async_scan() == []
 
 
+def test_own_numbers_are_judged_once_the_ingredients_change():
+    from custom_components.food_diary.checks import ingredients_key
+
+    own = {**PRINTED, "source": "own"}
+    assert doubt(PASTA, {**own, "typed_for": ingredients_key(PASTA)}, WHOLE) is None
+    assert doubt(PASTA, {**own, "typed_for": "another-key"}, WHOLE)["portions"] == 2
+    assert doubt(PASTA, {**own, "source": "import", "typed_for": "another-key"}, WHOLE) is not None
+    assert doubt(PASTA, {**own, "typed_for": "another-key", "dismissed": numbers_key(PRINTED)}, WHOLE) is None
+
+
+async def test_own_numbers_are_doubted_after_an_ingredients_edit(hass: HomeAssistant, setup, ai_calls):
+    """Her typed numbers are trusted for the ingredients of the time; an ingredients edit after them raises the check
+    (the numbers stay hers), and new numbers are trusted again. Before: own numbers were never doubted."""
+    c = checker(hass, setup)
+    book(hass).set("ig-pasta", {**PRINTED, "source": "own"})
+    assert await c.async_scan() == [] and not whole_asks(ai_calls)  # no AI asked for her numbers
+    assert book(hass).get("ig-pasta")["typed_for"]
+    assert "typed_for" not in await call(hass, "get_dish_nutrition", {"dish_id": "ig-pasta"})
+    checker(hass, setup, [{**PASTA, "ingredients": [*PASTA["ingredients"], {"name": "Halloumi", "amount": "80 g"}]}, STEW])
+    assert await c.async_scan() == ["ig-pasta"]
+    kept = book(hass).get("ig-pasta")
+    assert kept["kcal"] == 470 and kept["source"] == "own" and kept["check"]["portions"] == 2  # kept, only asked about
+    book(hass).set("ig-pasta", {**HALF, "source": "own"})  # she types new numbers for the new ingredients
+    assert await c.async_scan() == [] and book(hass).get("ig-pasta").get("check") is None
+
+
 async def test_new_ingredients_are_added_up_again(hass: HomeAssistant, setup, ai_calls):
     c = checker(hass, setup)
     book(hass).set("ig-pasta", PRINTED)

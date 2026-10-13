@@ -166,7 +166,7 @@ RENAME_SCHEMA = vol.Schema(
         vol.Required("to"): vol.In(sorted({*SOURCES, *DISH_SOURCES})),
     }
 )
-INTERNAL = ("estimate", "checked_for", "dismissed")  # the numbers check's own notes on a book entry
+INTERNAL = ("estimate", "checked_for", "dismissed", "typed_for")  # the numbers check's own notes on a book entry
 
 NOT_IN_DIARY = "That entry isn't in the diary on that day."
 NOT_UNDOABLE = "That change can't be undone any more."  # apps may match this text: keep it

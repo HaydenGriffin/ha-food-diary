@@ -807,7 +807,9 @@ A dish in doubt gets `check: {kcal, protein_g, carbs_g, fat_g, portions, reason}
 explains the calories, the suggestion says so (for example "may serve 2"). If that portion count explains all the
 numbers, the dish isn't in doubt at all.
 
-`own` numbers and dismissed numbers are never doubted. The check appears on `get_dishes`, on `get_dish_nutrition`, and on
+Dismissed numbers are never doubted. Your own numbers (`own`, or `import`) aren't either, until the recipe's ingredients
+change after you gave them: then they are checked like any other (kept as they are; the check only asks). New numbers
+are trusted again for the ingredients of the time. The check appears on `get_dishes`, on `get_dish_nutrition`, and on
 `get_day` entries for that recipe whose numbers weren't edited.
 
 ## Storage and privacy
