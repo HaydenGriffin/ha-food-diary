@@ -90,6 +90,11 @@ from those tests' screenshots by [`tools/showcase`](tools/showcase).
 I built this for my own household: a replacement for a subscription food tracker that keeps our data at home and fits
 into the rest of our Home Assistant setup. This is the public cut of it, with the house-specific parts removed.
 
+## Support
+
+Food Diary is free and open source. If it made keeping your diary easier, you can
+[buy me a coffee](https://buymeacoffee.com/haydengriffin). Bug reports and pull requests are just as welcome.
+
 ## License
 
 [MIT](LICENSE)
