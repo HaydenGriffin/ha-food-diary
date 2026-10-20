@@ -16,7 +16,7 @@ from pytest_homeassistant_custom_component.common import async_fire_time_changed
 from custom_components.food_diary.const import DOMAIN, OFF_URL
 from custom_components.food_diary.estimate import amount_grams, label_result, off_product
 
-from .conftest import ALEX, JPEG, NOTIFY, OPEN_PATH, PLAN, SAM, WEBHOOK_ID
+from .conftest import AI_ANSWERS, ALEX, JPEG, NOTIFY, OPEN_PATH, PLAN, SAM, WEBHOOK_ID
 
 B64 = base64.b64encode(JPEG).decode()
 KCAL = "sensor.alex_food_diary_calories_today"
@@ -298,3 +298,25 @@ async def test_future_days_are_fine(hass: HomeAssistant, setup):
     h = await call(hass, "get_history", {"days": 8, "date": nextweek})
     assert h["days"][-1]["kcal"] == 300
     assert float(hass.states.get(KCAL).state) == 0  # today's sensors only count today
+
+
+async def test_a_meal_from_words_says_which_meals_it_is(hass: HomeAssistant, setup, ai_calls, monkeypatch):
+    """1.7.0: so an app can put a dinner dish under dinner (not the time of day's breakfast) when nobody picked a meal."""
+    monkeypatch.setitem(AI_ANSWERS, "estimate a meal from words",
+                        {**AI_ANSWERS["estimate a meal from words"], "name": "Pad thai", "meals": ["Dinner", "lunch", "brunch", "dinner"]})
+    out = await call(hass, "estimate", {"kind": "text", "text": "pad thai with prawns"})
+    assert out["meals"] == ["dinner", "lunch"]  # known meals only, once each, in the AI's order
+    assert "which meals it is usually eaten as" in ai_calls[-1]["instructions"]
+
+
+async def test_no_meals_said_is_no_meals_key(hass: HomeAssistant, setup, ai_calls):
+    out = await call(hass, "estimate", {"kind": "text", "text": "toast"})
+    assert "meals" not in out and out["kcal"] == 315
+
+
+async def test_logging_by_voice_ignores_the_meals(hass: HomeAssistant, setup, ai_calls, monkeypatch):
+    """The diary keeps its own fields: a logged entry never carries the estimate's meals."""
+    monkeypatch.setitem(AI_ANSWERS, "estimate a meal from words", {**AI_ANSWERS["estimate a meal from words"], "meals": ["dinner"]})
+    found = await setup.runtime_data.estimator.text("toast")
+    e = setup.runtime_data.diary.add("2026-10-20", {**found, "meal": "lunch", "source": "voice"})
+    assert "meals" not in e and e["meal"] == "lunch"

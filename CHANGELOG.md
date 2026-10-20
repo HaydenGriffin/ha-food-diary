@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.0 (20 Oct 2026)
+
+- `estimate` for a photo or text says which meals the food is usually eaten as (`meals`, most usual first), so an app
+  can put pad thai under dinner rather than the time of day's breakfast when nobody picked a meal. `log_food` ignores it.
+
 ## 1.6.1 (13 Oct 2026)
 
 - `update_food` takes `unknown`, so Undo after a fix can mark a macro unknown again instead of writing a measured 0.

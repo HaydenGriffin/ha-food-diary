@@ -28,7 +28,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import MAX_IMAGE_BYTES, NUM, OFF_FIELDS, OFF_URL, OFF_USER_AGENT, PHOTO_DAYS, PHOTO_DIR
+from .const import MAX_IMAGE_BYTES, MEALS, NUM, OFF_FIELDS, OFF_URL, OFF_USER_AGENT, PHOTO_DAYS, PHOTO_DIR
 from .diary import Book, given, num, values_of
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,6 +50,14 @@ MEAL_STRUCTURE = {
     "foods": {"description": "The foods you can see or that it contains", "selector": {"text": {"multiple": True}}},
     **{k: {"description": f"{v} for ONE portion", "required": True, "selector": NUMBER} for k, v in LABELS.items()},
     "note": {"description": 'One short line on what the portion is (like "1 bowl, about 350 g")', "selector": {"text": {}}},
+}
+# a meal from a photo or words also says which meals it is (so an app can put a dinner dish under dinner by itself)
+FIT_STRUCTURE = {
+    **MEAL_STRUCTURE,
+    "meals": {
+        "description": "Which meals this is usually eaten as, the most usual first (breakfast, lunch, dinner or snack)",
+        "selector": {"select": {"options": list(MEALS), "multiple": True}},
+    },
 }
 LABEL_STRUCTURE = {
     "name": {
@@ -89,7 +97,8 @@ AMOUNT_STRUCTURE = {
 PHOTO_PROMPT = (
     "This is a photo of food {who} is about to eat (one adult{where}). Say what it is and estimate the nutrition for ONE "
     "portion as it is on the plate or in the bowl: calories, protein, carbohydrates, fat and fibre in grams. Be realistic for "
-    "typical portions{where}; when something is unclear, assume the usual home-cooked version.{hint}"
+    "typical portions{where}; when something is unclear, assume the usual home-cooked version. Also say which meals it is "
+    "usually eaten as (breakfast, lunch, dinner or snack), the most usual first.{hint}"
 )
 LABEL_PROMPT = (
     "This is a photo of the nutrition label on a food or drink pack. Read the values PER 100 g (or per 100 ml): calories (kcal, "
@@ -108,7 +117,8 @@ AMOUNT_PROMPT = (
 TEXT_PROMPT = (
     '{who} (one adult{where}) ate this: "{text}". Name it in short English and estimate the nutrition for exactly what '
     "they wrote (if no amount is given, one normal portion): calories, protein, carbohydrates, fat and fibre in grams. Food "
-    "names in other languages are fine; answer in English."
+    "names in other languages are fine; answer in English. Also say which meals it is usually eaten as (breakfast, lunch, "
+    "dinner or snack), the most usual first."
 )
 DISH_PROMPT = (
     "Estimate the nutrition for ONE portion of this home-cooked dish. The INGREDIENTS are {per}. Give calories, protein, "
@@ -124,6 +134,18 @@ WHOLE_PROMPT = (
 WHOLE_STRUCTURE = {
     k: {"description": f"{v} for ALL the ingredients together", "required": True, "selector": NUMBER} for k, v in LABELS.items()
 }
+
+def meals_of(x: dict[str, Any]) -> dict[str, list[str]]:
+    """{"meals": [...]}: the meals the AI said the food is eaten as, known ones only, once each, in its order; {} when none."""
+    raw = x.get("meals")
+    raw = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+    out = []
+    for m in raw:
+        m = str(m).strip().lower()
+        if m in MEALS and m not in out:
+            out.append(m)
+    return {"meals": out} if out else {}
+
 
 # a count of these is that many servings ("3 biscuits"); anything else ("a big bowl") is read by the AI
 PIECES = (
@@ -318,10 +340,10 @@ class Estimator:
         x = await self._ai(
             "estimate a meal from a photo",
             PHOTO_PROMPT.format(who=self.who, where=self.where, hint=f" They say: {hint}" if hint else ""),
-            MEAL_STRUCTURE,
+            FIT_STRUCTURE,
             [media],
         )
-        return {**self._meal(x, "photo"), "photo": media[0].rsplit("/", 1)[-1]}
+        return {**self._meal(x, "photo"), **meals_of(x), "photo": media[0].rsplit("/", 1)[-1]}
 
     async def text(self, text: str) -> dict[str, Any]:
         if not str(text or "").strip():
@@ -329,9 +351,9 @@ class Estimator:
         x = await self._ai(
             "estimate a meal from words",
             TEXT_PROMPT.format(who=self.who, where=self.where, text=str(text).strip()[:300]),
-            MEAL_STRUCTURE,
+            FIT_STRUCTURE,
         )
-        return self._meal(x, "text")
+        return {**self._meal(x, "text"), **meals_of(x)}
 
     async def label(self, image: str, amount: str = "", barcode: str = "") -> dict[str, Any]:
         media = await self.save_photo(image)

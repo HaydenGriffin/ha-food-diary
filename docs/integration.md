@@ -455,11 +455,14 @@ amounts like "50 g", "3 biscuits" or "half the pack" are worked out without the 
 
 | Kind | Response |
 | --- | --- |
-| `photo` | `{name, <five numbers>, note, foods, source: "photo", photo}`. Pass `photo` to `log_food` to keep the picture with the entry. |
-| `text` | `{name, <five numbers>, note, foods, source: "text"}`. |
+| `photo` | `{name, <five numbers>, note, foods, meals?, source: "photo", photo}`. Pass `photo` to `log_food` to keep the picture with the entry. |
+| `text` | `{name, <five numbers>, note, foods, meals?, source: "text"}`. |
 | `label` | `{name, per_100, grams, unit, serving_g, pack_g, guessed, note, <five numbers>, source: "label", barcode?}`. |
 | `barcode` | Like `label`, plus `source: "barcode"`, `barcode`, `product_source` and `image_url?`. |
 | `dish` | `{name, <five numbers>, source: "dish", ref: <dish_id>, nutrition_source}`. Freshly estimated answers also have `note` and `foods`. |
+
+`meals` (photo and text): the meals the food is usually eaten as, most usual first (`breakfast`, `lunch`, `dinner`, `snack`),
+when the AI said; an app can use it to suggest where food goes when nobody picked a meal. `log_food` ignores it.
 
 Every kind adds `unknown` when the answer lacks a macro (the AI left it out, or Open Food Facts doesn't list it); its
 number is then 0. Send it on with `log_food`.
