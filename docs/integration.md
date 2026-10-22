@@ -464,6 +464,9 @@ amounts like "50 g", "3 biscuits" or "half the pack" are worked out without the 
 `meals` (photo and text): the meals the food is usually eaten as, most usual first (`breakfast`, `lunch`, `dinner`, `snack`),
 when the AI said; an app can use it to suggest where food goes when nobody picked a meal. `log_food` ignores it.
 
+`note` (photo and text): what one portion is, with about what it weighs ("1 slice, about 40 g"), so an app can show the
+weight and scale it with the portions.
+
 Every kind adds `unknown` when the answer lacks a macro (the AI left it out, or Open Food Facts doesn't list it); its
 number is then 0. Send it on with `log_food`.
 

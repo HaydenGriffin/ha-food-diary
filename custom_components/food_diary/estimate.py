@@ -49,7 +49,10 @@ MEAL_STRUCTURE = {
     },
     "foods": {"description": "The foods you can see or that it contains", "selector": {"text": {"multiple": True}}},
     **{k: {"description": f"{v} for ONE portion", "required": True, "selector": NUMBER} for k, v in LABELS.items()},
-    "note": {"description": 'One short line on what the portion is (like "1 bowl, about 350 g")', "selector": {"text": {}}},
+    "note": {
+        "description": 'One short line on what the portion is, always with about what it weighs (like "1 bowl, about 350 g")',
+        "selector": {"text": {}},
+    },
 }
 # a meal from a photo or words also says which meals it is (so an app can put a dinner dish under dinner by itself)
 FIT_STRUCTURE = {
@@ -98,7 +101,8 @@ PHOTO_PROMPT = (
     "This is a photo of food {who} is about to eat (one adult{where}). Say what it is and estimate the nutrition for ONE "
     "portion as it is on the plate or in the bowl: calories, protein, carbohydrates, fat and fibre in grams. Be realistic for "
     "typical portions{where}; when something is unclear, assume the usual home-cooked version. Also say which meals it is "
-    "usually eaten as (breakfast, lunch, dinner or snack), the most usual first.{hint}"
+    "usually eaten as (breakfast, lunch, dinner or snack), the most usual first. In the note, say what the portion is and "
+    'about what it weighs in g (or ml for a drink), like "1 bowl, about 350 g".{hint}'
 )
 LABEL_PROMPT = (
     "This is a photo of the nutrition label on a food or drink pack. Read the values PER 100 g (or per 100 ml): calories (kcal, "
@@ -118,7 +122,8 @@ TEXT_PROMPT = (
     '{who} (one adult{where}) ate this: "{text}". Name it in short English and estimate the nutrition for exactly what '
     "they wrote (if no amount is given, one normal portion): calories, protein, carbohydrates, fat and fibre in grams. Food "
     "names in other languages are fine; answer in English. Also say which meals it is usually eaten as (breakfast, lunch, "
-    "dinner or snack), the most usual first."
+    "dinner or snack), the most usual first. In the note, say what the portion is and about what it weighs in g (or ml for "
+    'a drink), like "1 slice, about 40 g".'
 )
 DISH_PROMPT = (
     "Estimate the nutrition for ONE portion of this home-cooked dish. The INGREDIENTS are {per}. Give calories, protein, "

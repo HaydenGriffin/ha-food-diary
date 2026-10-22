@@ -320,3 +320,10 @@ async def test_logging_by_voice_ignores_the_meals(hass: HomeAssistant, setup, ai
     found = await setup.runtime_data.estimator.text("toast")
     e = setup.runtime_data.diary.add("2026-10-20", {**found, "meal": "lunch", "source": "voice"})
     assert "meals" not in e and e["meal"] == "lunch"
+
+
+@pytest.mark.parametrize("kind", ["text", "photo"])
+async def test_the_note_says_what_a_portion_weighs(hass: HomeAssistant, setup, ai_calls, kind):
+    """1.7.1: so an app can show the food's weight ("about 40 g"), not only its grams of protein."""
+    await call(hass, "estimate", {"kind": kind, "text": "toast", "image": B64})
+    assert "about what it weighs in g" in ai_calls[-1]["instructions"]

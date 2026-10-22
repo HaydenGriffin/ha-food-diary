@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.1 (22 Oct 2026)
+
+- The `note` on a photo or text estimate says about what one portion weighs ("1 slice, about 40 g"), so an app can show
+  the food's weight and not only its grams of protein.
+
 ## 1.7.0 (20 Oct 2026)
 
 - `estimate` for a photo or text says which meals the food is usually eaten as (`meals`, most usual first), so an app
