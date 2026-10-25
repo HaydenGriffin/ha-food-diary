@@ -302,8 +302,11 @@ async def test_future_days_are_fine(hass: HomeAssistant, setup):
 
 async def test_a_meal_from_words_says_which_meals_it_is(hass: HomeAssistant, setup, ai_calls, monkeypatch):
     """1.7.0: so an app can put a dinner dish under dinner (not the time of day's breakfast) when nobody picked a meal."""
-    monkeypatch.setitem(AI_ANSWERS, "estimate a meal from words",
-                        {**AI_ANSWERS["estimate a meal from words"], "name": "Pad thai", "meals": ["Dinner", "lunch", "brunch", "dinner"]})
+    monkeypatch.setitem(
+        AI_ANSWERS,
+        "estimate a meal from words",
+        {**AI_ANSWERS["estimate a meal from words"], "name": "Pad thai", "meals": ["Dinner", "lunch", "brunch", "dinner"]},
+    )
     out = await call(hass, "estimate", {"kind": "text", "text": "pad thai with prawns"})
     assert out["meals"] == ["dinner", "lunch"]  # known meals only, once each, in the AI's order
     assert "which meals it is usually eaten as" in ai_calls[-1]["instructions"]
@@ -316,7 +319,9 @@ async def test_no_meals_said_is_no_meals_key(hass: HomeAssistant, setup, ai_call
 
 async def test_logging_by_voice_ignores_the_meals(hass: HomeAssistant, setup, ai_calls, monkeypatch):
     """The diary keeps its own fields: a logged entry never carries the estimate's meals."""
-    monkeypatch.setitem(AI_ANSWERS, "estimate a meal from words", {**AI_ANSWERS["estimate a meal from words"], "meals": ["dinner"]})
+    monkeypatch.setitem(
+        AI_ANSWERS, "estimate a meal from words", {**AI_ANSWERS["estimate a meal from words"], "meals": ["dinner"]}
+    )
     found = await setup.runtime_data.estimator.text("toast")
     e = setup.runtime_data.diary.add("2026-10-20", {**found, "meal": "lunch", "source": "voice"})
     assert "meals" not in e and e["meal"] == "lunch"
@@ -327,3 +332,81 @@ async def test_the_note_says_what_a_portion_weighs(hass: HomeAssistant, setup, a
     """1.7.1: so an app can show the food's weight ("about 40 g"), not only its grams of protein."""
     await call(hass, "estimate", {"kind": kind, "text": "toast", "image": B64})
     assert "about what it weighs in g" in ai_calls[-1]["instructions"]
+
+
+def item(name: str, grams: float, kcal_100: float, protein_100: float = 0, unit: str = "g") -> dict:
+    return {
+        "name": name,
+        "grams": grams,
+        "unit": unit,
+        "kcal_100": kcal_100,
+        "protein_g_100": protein_100,
+        "carbs_g_100": 0,
+        "fat_g_100": 0,
+        "fibre_g_100": 0,
+    }
+
+
+async def test_a_photo_lists_each_thing_with_its_weight(hass: HomeAssistant, setup, ai_calls, monkeypatch):
+    """1.8.0: each thing on the plate, with about what it weighs, so an app can show and correct each one."""
+    monkeypatch.setitem(
+        AI_ANSWERS,
+        "estimate a meal from a photo",
+        {
+            **AI_ANSWERS["estimate a meal from a photo"],
+            "items": [
+                item("Chicken thigh, roasted", 140, 213, 26),
+                item("Roast potatoes", 160, 145, 2.2),
+                item("Gravy", 60, 255, 0, unit="ml"),
+                item("", 50, 100),
+                item("Air", 0, 100),
+                item("Plate", 200, 0),
+                "not an item",  # left out
+            ],
+        },
+    )
+    out = await call(hass, "estimate", {"kind": "photo", "image": B64})
+    assert [(i["name"], i["grams"], i["unit"]) for i in out["items"]] == [
+        ("Chicken thigh, roasted", 140, "g"),
+        ("Roast potatoes", 160, "g"),
+        ("Gravy", 60, "ml"),
+    ]
+    assert out["items"][0]["per_100"]["kcal"] == 213 and out["items"][0]["kcal"] == 298.2 and out["items"][0]["protein_g"] == 36.4
+    assert out["kcal"] == round(298.2 + 232 + 153, 1) and out["protein_g"] == round(
+        36.4 + 3.5, 1
+    )  # the meal is what they add up to
+    assert "each separate food or drink you can see" in ai_calls[-1]["instructions"]
+    assert ai_calls[-1]["structure"]["items"]["selector"]["object"]["multiple"] is True
+
+
+async def test_one_thing_in_a_photo_is_no_items(hass: HomeAssistant, setup, ai_calls, monkeypatch):
+    monkeypatch.setitem(
+        AI_ANSWERS,
+        "estimate a meal from a photo",
+        {**AI_ANSWERS["estimate a meal from a photo"], "items": [item("Chilli con carne", 400, 130)]},
+    )
+    out = await call(hass, "estimate", {"kind": "photo", "image": B64})
+    assert "items" not in out and out["kcal"] == 520
+
+
+async def test_save_these_foods_as_a_meal(hass: HomeAssistant, setup):
+    """1.8.0: `foods` saves exactly these (what a photo turned into), not whatever else is in that meal."""
+    await call(hass, "log_food", {"name": "Wine", "kcal": 120, "meal": "dinner"}, response=False)
+    saved = (
+        await call(
+            hass,
+            "save_meal",
+            {
+                "name": "Roast dinner",
+                "meal": "dinner",
+                "foods": [
+                    {"name": "Chicken thigh", "kcal": 298.2, "protein_g": 36.4, "carbs_g": 0, "fat_g": 16, "fibre_g": 0},
+                    {"name": "Roast potatoes", "kcal": 232, "protein_g": 3.5},
+                ],
+            },
+        )
+    )["saved"]
+    assert saved["items"] == ["Chicken thigh", "Roast potatoes"] and saved["kcal"] == 530.2 and saved["protein_g"] == 39.9
+    assert saved["unknown"] == ["carbs_g", "fat_g", "fibre_g"]  # the potatoes didn't say
+    with pytest.raises(ServiceValidationError):
+        await call(hass, "save_meal", {"name": "Nothing", "meal": "dinner", "foods": [{"name": "Air", "kcal": 0}]})

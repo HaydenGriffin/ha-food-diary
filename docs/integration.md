@@ -340,15 +340,16 @@ Fields: `person`, `date` (the last day, default yesterday), `days` (1 to 31, def
 
 #### `food_diary.save_meal` (response: optional)
 
-Keeps everything logged in one meal on one day as one thing to log again. Saving with an existing name replaces that
-saved meal.
+Keeps everything logged in one meal on one day as one thing to log again, or, with `foods`, exactly those foods. Saving
+with an existing name replaces that saved meal.
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `person` | entity id | |
 | `name` | string | **Required.** |
-| `date` | date | |
+| `date` | date | Ignored with `foods`. |
 | `meal` | meal | **Required.** |
+| `foods` | list | Each `{name, <five numbers>, unknown?}`, as `log_food` takes them: saved as they are, whatever else that meal holds. Foods without calories are left out. |
 
 **Response:**
 
@@ -463,6 +464,10 @@ amounts like "50 g", "3 biscuits" or "half the pack" are worked out without the 
 
 `meals` (photo and text): the meals the food is usually eaten as, most usual first (`breakfast`, `lunch`, `dinner`, `snack`),
 when the AI said; an app can use it to suggest where food goes when nobody picked a meal. `log_food` ignores it.
+
+`items` (photo, when it shows two or more separate things): each `{name, grams, unit, per_100, <five numbers>}`, about
+what that thing weighs and its numbers per 100 g (or ml). The meal's own numbers are then what the items add up to. To log
+them one by one, send each item's `per_100` and `grams` to `log_food`; an app can let the person correct each weight first.
 
 `note` (photo and text): what one portion is, with about what it weighs ("1 slice, about 40 g"), so an app can show the
 weight and scale it with the portions.

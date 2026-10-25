@@ -93,6 +93,20 @@ LABEL_STRUCTURE = {
         "selector": {"text": {}},
     },
 }
+# a photo also lists each separate thing on the plate with about what it weighs, so an app can show and correct each one
+ITEM_FIELDS = {
+    "name": {"required": True, "selector": {"text": {}}},
+    "grams": {"required": True, "selector": NUMBER},
+    "unit": {"required": True, "selector": {"text": {}}},
+    **{f"{k}_100": {"required": True, "selector": NUMBER} for k in LABELS},
+}
+PHOTO_STRUCTURE = {
+    **FIT_STRUCTURE,
+    "items": {
+        "description": "Each separate food or drink you can see, with about what it weighs and its numbers per 100 g",
+        "selector": {"object": {"fields": ITEM_FIELDS, "multiple": True}},
+    },
+}
 AMOUNT_STRUCTURE = {
     "eaten_g": {"description": "How many g or ml were eaten (0 if it can't be worked out)", "required": True, "selector": NUMBER},
 }
@@ -102,7 +116,12 @@ PHOTO_PROMPT = (
     "portion as it is on the plate or in the bowl: calories, protein, carbohydrates, fat and fibre in grams. Be realistic for "
     "typical portions{where}; when something is unclear, assume the usual home-cooked version. Also say which meals it is "
     "usually eaten as (breakfast, lunch, dinner or snack), the most usual first. In the note, say what the portion is and "
-    'about what it weighs in g (or ml for a drink), like "1 bowl, about 350 g".{hint}'
+    'about what it weighs in g (or ml for a drink), like "1 bowl, about 350 g".\n'
+    "Also list the items: each separate food or drink you can see (the chicken, the potatoes, the broccoli, the gravy), "
+    "one item each, with name (short English, sentence case), grams (about what that item weighs as served; for a drink, "
+    'ml), unit ("g", or "ml" for a drink) and its calories, protein, carbohydrates, fat and fibre per 100 g (or 100 ml) as '
+    "it is cooked and served (kcal_100, protein_g_100, carbs_g_100, fat_g_100, fibre_g_100). One dish that is eaten as one "
+    "thing (a bowl of soup, a sandwich, a pizza slice) is one item. The items should add up to the meal's numbers.{hint}"
 )
 LABEL_PROMPT = (
     "This is a photo of the nutrition label on a food or drink pack. Read the values PER 100 g (or per 100 ml): calories (kcal, "
@@ -139,6 +158,30 @@ WHOLE_PROMPT = (
 WHOLE_STRUCTURE = {
     k: {"description": f"{v} for ALL the ingredients together", "required": True, "selector": NUMBER} for k, v in LABELS.items()
 }
+
+
+def items_of(x: dict[str, Any]) -> list[dict[str, Any]]:
+    """The separate things in a photo: name, grams, unit, per_100 and what that weight comes to; at most 12, each with
+    calories and a weight (the rest are left out)."""
+    out = []
+    for i in x.get("items") or []:
+        if not isinstance(i, dict) or not (name := str(i.get("name") or "").strip()):
+            continue
+        grams, kcal_100 = num(i.get("grams")), num(i.get("kcal_100"))
+        if not (0 < grams <= 3000 and 0 < kcal_100 <= 900):
+            continue
+        per_100 = {k: round(num(i.get(f"{k}_100")), 1) for k in NUM}
+        out.append(
+            {
+                "name": name[:80],
+                "grams": round(grams),
+                "unit": "ml" if str(i.get("unit") or "").strip().lower() == "ml" else "g",
+                "per_100": per_100,
+                **{k: round(per_100[k] * grams / 100, 1) for k in NUM},
+            }
+        )
+    return out[:12]
+
 
 def meals_of(x: dict[str, Any]) -> dict[str, list[str]]:
     """{"meals": [...]}: the meals the AI said the food is eaten as, known ones only, once each, in its order; {} when none."""
@@ -345,10 +388,13 @@ class Estimator:
         x = await self._ai(
             "estimate a meal from a photo",
             PHOTO_PROMPT.format(who=self.who, where=self.where, hint=f" They say: {hint}" if hint else ""),
-            FIT_STRUCTURE,
+            PHOTO_STRUCTURE,
             [media],
         )
-        return {**self._meal(x, "photo"), **meals_of(x), "photo": media[0].rsplit("/", 1)[-1]}
+        out = {**self._meal(x, "photo"), **meals_of(x), "photo": media[0].rsplit("/", 1)[-1]}
+        if len(items := items_of(x)) > 1:  # several things: the meal is what they add up to, so the two always agree
+            out.update(items=items, **values_of({k: round(sum(i[k] for i in items), 1) for k in NUM}))
+        return out
 
     async def text(self, text: str) -> dict[str, Any]:
         if not str(text or "").strip():

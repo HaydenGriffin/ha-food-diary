@@ -475,6 +475,10 @@ save_meal:
       selector:
         select:
           options: [breakfast, lunch, dinner, snack]
+    foods:
+      example: '[{"name": "Roast potatoes", "kcal": 232, "protein_g": 3.5}]'
+      selector:
+        object: {}
 update_saved_meal:
   fields:
     person:

@@ -482,6 +482,10 @@
         "meal": {
           "name": "Meal",
           "description": "Which meal of that day."
+        },
+        "foods": {
+          "name": "Foods",
+          "description": "Save these foods (each a name and its numbers) instead of what's logged in that meal."
         }
       }
     },

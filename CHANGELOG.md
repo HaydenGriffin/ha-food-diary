@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.0 (25 Oct 2026)
+
+- A photo `estimate` lists each separate thing on the plate as `items`, with about what it weighs and its numbers per
+  100 g, so an app can show every item's weight and let the person correct it. A photo of one thing has no `items`.
+- `save_meal` takes `foods`: save exactly these foods as a meal (what a photo turned into), not everything in that meal.
+
 ## 1.7.1 (22 Oct 2026)
 
 - The `note` on a photo or text estimate says about what one portion weighs ("1 slice, about 40 g"), so an app can show

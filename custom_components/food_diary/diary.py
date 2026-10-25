@@ -421,7 +421,15 @@ class Diary:
 
     def save_meal(self, name: str, d: str, meal: str) -> dict[str, Any] | None:
         """Keep one meal of a day (several foods) as one thing to log again; the same name replaces the old one."""
-        items = [e for e in self.entries(d) if e.get("meal") == meal]
+        return self._save(name, meal, [e for e in self.entries(d) if e.get("meal") == meal])
+
+    def save_foods(self, name: str, meal: str, foods: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Keep these foods (name and numbers, as log_food takes them) as one meal, without looking at the diary."""
+        return self._save(
+            name, meal, [{"name": str(f["name"]).strip()[:80], **values_of(f)} for f in foods if num(f.get("kcal")) > 0]
+        )
+
+    def _save(self, name: str, meal: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
         if not items:
             return None
         clean = str(name).strip()[:60] or meal.title()

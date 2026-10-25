@@ -74,7 +74,7 @@ def ai_calls() -> Generator[list[dict[str, Any]]]:
     calls: list[dict[str, Any]] = []
 
     async def fake_ai(self, task, instructions, structure, attachments=None):
-        calls.append({"task": task, "instructions": instructions, "attachments": attachments})
+        calls.append({"task": task, "instructions": instructions, "structure": structure, "attachments": attachments})
         return dict(AI_ANSWERS[task])
 
     with patch("custom_components.food_diary.estimate.Estimator._ai", fake_ai):
@@ -87,7 +87,7 @@ def held_ai(ai_calls):
     held = SimpleNamespace(gate=asyncio.Event(), asked=asyncio.Event(), answers=dict(AI_ANSWERS))
 
     async def slow_ai(self, task, instructions, structure, attachments=None):
-        ai_calls.append({"task": task, "instructions": instructions, "attachments": attachments})
+        ai_calls.append({"task": task, "instructions": instructions, "structure": structure, "attachments": attachments})
         held.asked.set()
         await held.gate.wait()
         return dict(held.answers[task])

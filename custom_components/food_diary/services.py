@@ -126,7 +126,15 @@ COPY_SCHEMA = vol.Schema(
     }
 )
 UNCOPY_SCHEMA = vol.Schema({**BASE, vol.Required("token"): cv.string})
-SAVE_MEAL_SCHEMA = vol.Schema({**BASE, vol.Required("name"): cv.string, DATE: cv.date, vol.Required("meal"): vol.In(MEALS)})
+SAVE_MEAL_SCHEMA = vol.Schema(
+    {
+        **BASE,
+        vol.Required("name"): cv.string,
+        DATE: cv.date,
+        vol.Required("meal"): vol.In(MEALS),
+        vol.Optional("foods"): vol.All(cv.ensure_list, [vol.Schema({vol.Required("name"): cv.string}, extra=vol.ALLOW_EXTRA)]),
+    }
+)
 SAVED_SCHEMA = vol.Schema({**BASE, vol.Required("saved_id"): cv.string})
 UPDATE_SAVED_SCHEMA = vol.Schema(
     {**BASE, vol.Required("saved_id"): cv.string, vol.Optional("name"): cv.string, vol.Optional("meal"): vol.In(MEALS)}
@@ -335,7 +343,12 @@ def async_register_services(hass: HomeAssistant) -> None:
         return {"ok": True}
 
     async def save_meal(call: ServiceCall) -> ServiceResponse:
-        if (saved := resolve(hass, call).diary.save_meal(call.data["name"], day_of(call), call.data["meal"])) is None:
+        diary = resolve(hass, call).diary
+        if "foods" in call.data:  # these foods, as they were added (not whatever else is in that meal)
+            saved = diary.save_foods(call.data["name"], call.data["meal"], call.data["foods"])
+        else:
+            saved = diary.save_meal(call.data["name"], day_of(call), call.data["meal"])
+        if saved is None:
             raise ServiceValidationError("Nothing is logged in that meal on that day.")
         return {"saved": saved}
 
