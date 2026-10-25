@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.9.0 (25 Oct 2026)
+
+- Batches: a pot cooked from weighed raw ingredients, eaten by the bowl in grams. `save_batch` keeps it with its totals,
+  its cooked weight (weighed, or estimated from how cooking changes each ingredient's weight) and its cooked per 100 g.
+  `update_batch` takes the real weight later, and bowls already logged follow. `delete_batch`, and `get_batches` for the
+  batches of the last 5 days and the dishes batched before (one per name, with its last batch). Kept 400 days.
+- `estimate` kind `ingredients`: a batch's raw ingredients in one AI call, each with grams (from an amount like "1 onion"
+  when no weight is given), raw numbers per 100 g and `cooked_factor`. Known products keep their own numbers.
+- `log_food` takes source `batch` with `ref` the batch id; the batch's name and per 100 g are used when not given.
+
 ## 1.8.0 (25 Oct 2026)
 
 - A photo `estimate` lists each separate thing on the plate as `items`, with about what it weighs and its numbers per

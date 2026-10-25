@@ -7,7 +7,10 @@ Creating services (log_food, copy_day) take an optional `client_id`: the same id
 
 A macro left out of log_food (or listed in its `unknown`, as an estimate, a saved meal or a recent food lists it) is
 unknown, not 0: the entry keeps it in `unknown`, and get_day / get_history / get_week_review count it in `incomplete`.
-update_food giving a macro makes it known; listing it in update_food's `unknown` makes it unknown again (Undo)."""
+update_food giving a macro makes it known; listing it in update_food's `unknown` makes it unknown again (Undo).
+
+log_food with source "batch" and ref a batch id (batches.py) takes the batch's name and cooked per_100 when they aren't
+given: grams is then all a bowl of it needs."""
 
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
 import voluptuous as vol
 
+from .batches import Batches, recent, regulars
 from .const import DISH_SOURCES, DOMAIN, MACROS, MEALS, NUM, SOURCES
 from .diary import Book, Diary, entry_unknown, num, nums, today, unknown_in, values_of
 from .notifications import fire_logged
@@ -41,10 +45,12 @@ CLIENT_ID = vol.All(cv.string, vol.Match(r"^[A-Za-z0-9_-]{8,64}$"))  # made by t
 EXPECTED_REV = vol.All(vol.Coerce(int), vol.Range(min=1))
 UNKNOWN = vol.All(cv.ensure_list, [vol.In(MACROS)])  # macros not known (sent back as an estimate or a saved meal gave them)
 
+PER_100 = vol.Schema({vol.Optional(k): vol.Coerce(float) for k in NUM}, extra=vol.REMOVE_EXTRA)
+GRAMS = vol.All(vol.Coerce(float), vol.Range(min=0, max=20000))
 LOG_SCHEMA = vol.Schema(
     {
         **BASE,
-        vol.Required("name"): cv.string,
+        vol.Optional("name"): cv.string,  # required, except for a batch (its name)
         **NUMBERS,
         vol.Optional("portions", default=1): PORTIONS,
         vol.Optional("meal"): vol.In(MEALS),
@@ -53,8 +59,8 @@ LOG_SCHEMA = vol.Schema(
         vol.Optional("ref"): cv.string,
         vol.Optional("note"): cv.string,
         vol.Optional("barcode"): cv.string,
-        vol.Optional("per_100"): vol.Schema({vol.Optional(k): vol.Coerce(float) for k in NUM}, extra=vol.REMOVE_EXTRA),
-        vol.Optional("grams"): vol.All(vol.Coerce(float), vol.Range(min=0, max=20000)),
+        vol.Optional("per_100"): PER_100,
+        vol.Optional("grams"): GRAMS,
         vol.Optional("unit"): vol.In(("g", "ml")),
         vol.Optional("edited"): cv.boolean,
         vol.Optional("photo"): cv.string,
@@ -89,10 +95,50 @@ HISTORY_SCHEMA = vol.Schema(
     {**BASE, DATE: cv.date, vol.Optional("days", default=7): vol.All(vol.Coerce(int), vol.Range(min=1, max=366))}
 )
 GOALS_SCHEMA = vol.Schema({**BASE, **NUMBERS})
+ESTIMATE_ITEM = vol.Schema(  # an ingredient to work out (kind "ingredients")
+    {
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=120)),
+        vol.Optional("grams"): GRAMS,
+        vol.Optional("amount"): cv.string,
+        vol.Optional("barcode"): cv.string,
+        vol.Optional("per_100"): PER_100,
+        vol.Optional("unknown"): UNKNOWN,
+    },
+    extra=vol.REMOVE_EXTRA,
+)
+BATCH_INGREDIENT = vol.Schema(
+    {
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=120)),
+        vol.Required("grams"): GRAMS,
+        vol.Required("per_100"): PER_100,
+        vol.Optional("cooked_factor"): vol.Coerce(float),  # kept within 0.2 to 4
+        vol.Optional("ref"): cv.string,
+        vol.Optional("unknown"): UNKNOWN,
+    },
+    extra=vol.REMOVE_EXTRA,
+)
+COOKED_G = vol.All(vol.Coerce(float), vol.Range(min=1, max=50000))
+BATCH_PORTIONS = vol.All(vol.Coerce(float), vol.Range(min=0.5, max=100))
+SAVE_BATCH_SCHEMA = vol.Schema(
+    {
+        **BASE,
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=80)),
+        DATE: cv.date,
+        vol.Required("ingredients"): vol.All(cv.ensure_list, vol.Length(min=1, max=50), [BATCH_INGREDIENT]),
+        vol.Optional("cooked_g"): COOKED_G,
+        vol.Optional("portions"): BATCH_PORTIONS,
+        vol.Optional("recipe_id"): cv.string,
+    }
+)
+UPDATE_BATCH_SCHEMA = vol.Schema(
+    {**BASE, vol.Required("batch_id"): cv.string, vol.Optional("cooked_g"): COOKED_G, vol.Optional("portions"): BATCH_PORTIONS}
+)
+BATCH_SCHEMA = vol.Schema({**BASE, vol.Required("batch_id"): cv.string})
+GET_BATCHES_SCHEMA = vol.Schema({**BASE, vol.Optional("days", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=400))})
 ESTIMATE_SCHEMA = vol.Schema(
     {
         **BASE,
-        vol.Required("kind"): vol.In(("photo", "label", "barcode", "text", "dish")),
+        vol.Required("kind"): vol.In(("photo", "label", "barcode", "text", "dish", "ingredients")),
         vol.Optional("image"): cv.string,
         vol.Optional("amount", default=""): cv.string,
         vol.Optional("hint", default=""): cv.string,
@@ -104,6 +150,7 @@ ESTIMATE_SCHEMA = vol.Schema(
         vol.Optional("servings", default=0): vol.Coerce(float),
         vol.Optional("amounts_per", default="recipe"): vol.In(("recipe", "portion")),
         vol.Optional("fresh", default=False): cv.boolean,
+        vol.Optional("items", default=[]): vol.All(cv.ensure_list, vol.Length(max=30), [ESTIMATE_ITEM]),
     }
 )
 PHOTO_SCHEMA = vol.Schema(
@@ -177,6 +224,7 @@ RENAME_SCHEMA = vol.Schema(
 INTERNAL = ("estimate", "checked_for", "dismissed", "typed_for")  # the numbers check's own notes on a book entry
 
 NOT_IN_DIARY = "That entry isn't in the diary on that day."
+NO_BATCH = "That batch isn't there."
 NOT_UNDOABLE = "That change can't be undone any more."  # apps may match this text: keep it
 
 
@@ -223,6 +271,18 @@ def repeat_flags(repeat: bool, deleted: bool) -> dict[str, bool]:
     return {**({"duplicate": True} if repeat else {}), **({"deleted": True} if deleted else {})}
 
 
+def from_batch(diary: Diary, f: dict[str, Any]) -> None:
+    """A bowl of a batch (source "batch", ref its id): the batch's name and cooked per_100, where log_food didn't give them."""
+    if f.get("source") != "batch" or (f.get("name") and f.get("per_100")):
+        return
+    if (b := Batches(diary).get(str(f.get("ref") or ""))) is None:
+        raise ServiceValidationError(NO_BATCH)
+    f.setdefault("name", b["name"])
+    if not f.get("per_100"):
+        f["per_100"] = dict(b["per_100"])
+        f["unknown"] = [k for k in MACROS if k in (*b.get("unknown", ()), *f.get("unknown", ()))]
+
+
 def logged(diary: Diary, record: dict[str, Any], repeat: bool) -> dict[str, Any]:
     """log_food's answer, for a new entry or a repeated client_id: the entry as it is now (None once it's deleted)."""
     d = record["date"]
@@ -267,6 +327,9 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def log_food(call: ServiceCall) -> ServiceResponse:
         data = resolve(hass, call)
         f = dict(call.data)
+        from_batch(data.diary, f)
+        if not str(f.get("name") or "").strip():
+            raise ServiceValidationError("Give the food's name.")
         if not num(f.get("kcal")) and not (f.get("per_100") and num(f.get("grams"))):
             raise ServiceValidationError("Give kcal, or per_100 with grams.")
         day = f.pop("date").isoformat() if f.get("date") else today()
@@ -363,6 +426,27 @@ def async_register_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError("That saved meal isn't there.")
         return {"ok": True}
 
+    async def save_batch(call: ServiceCall) -> ServiceResponse:
+        if not any(i["grams"] > 0 for i in call.data["ingredients"]):
+            raise ServiceValidationError("Give each ingredient's raw weight (grams).")
+        batch, refreshed = Batches(resolve(hass, call).diary).save(dict(call.data), day_of(call))
+        return {"batch": batch, "refreshed": refreshed}
+
+    async def update_batch(call: ServiceCall) -> ServiceResponse:
+        c = call.data
+        if (r := Batches(resolve(hass, call).diary).update(c["batch_id"], c.get("cooked_g"), c.get("portions"))) is None:
+            raise ServiceValidationError(NO_BATCH)
+        return {"batch": r[0], "refreshed": r[1]}
+
+    async def delete_batch(call: ServiceCall) -> ServiceResponse:
+        if Batches(resolve(hass, call).diary).delete(call.data["batch_id"]) is None:
+            raise ServiceValidationError(NO_BATCH)
+        return {"ok": True}
+
+    async def get_batches(call: ServiceCall) -> ServiceResponse:
+        batches = Batches(resolve(hass, call).diary).all
+        return {"recent": recent(batches, today(), call.data["days"]), "regulars": regulars(batches)}
+
     async def get_week_review(call: ServiceCall) -> ServiceResponse:
         d = call.data.get("date")
         end = d.isoformat() if d else (date.fromisoformat(today()) - timedelta(days=1)).isoformat()
@@ -418,6 +502,8 @@ def async_register_services(hass: HomeAssistant) -> None:
             return await est.barcode(c["barcode"], c["amount"])
         if kind == "text":
             return await est.text(c["text"])
+        if kind == "ingredients":
+            return await est.ingredients(c["items"], c["dish_name"])
         if not c.get("dish_id"):
             raise ServiceValidationError("Add dish_id.")
         return await est.dish(c["dish_id"], c["dish_name"], c["ingredients"], c["servings"], c["amounts_per"], c["fresh"])
@@ -515,6 +601,10 @@ def async_register_services(hass: HomeAssistant) -> None:
         ("save_meal", save_meal, SAVE_MEAL_SCHEMA, SupportsResponse.OPTIONAL),
         ("update_saved_meal", update_saved_meal, UPDATE_SAVED_SCHEMA, SupportsResponse.OPTIONAL),
         ("delete_saved_meal", delete_saved_meal, SAVED_SCHEMA, SupportsResponse.OPTIONAL),
+        ("save_batch", save_batch, SAVE_BATCH_SCHEMA, SupportsResponse.OPTIONAL),
+        ("update_batch", update_batch, UPDATE_BATCH_SCHEMA, SupportsResponse.OPTIONAL),
+        ("delete_batch", delete_batch, BATCH_SCHEMA, SupportsResponse.OPTIONAL),
+        ("get_batches", get_batches, GET_BATCHES_SCHEMA, SupportsResponse.ONLY),
         ("get_week_review", get_week_review, REVIEW_SCHEMA, SupportsResponse.ONLY),
         ("get_dishes", get_dishes, vol.Schema(BASE), SupportsResponse.ONLY),
         ("sync_plan", sync_plan, vol.Schema(BASE), SupportsResponse.OPTIONAL),

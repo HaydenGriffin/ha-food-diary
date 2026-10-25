@@ -6,6 +6,8 @@
 - barcode: Open Food Facts (or the product book) gives the per-100 values; no AI unless the amount needs reading.
 - text: "2 eggs on toast".
 - dish: a recipe's ingredients and servings; the answer is kept per dish so it is only worked out once.
+- ingredients: the raw ingredients of a batch (batches.py), each with its raw numbers per 100 g and how cooking changes its
+  weight; "1 onion" becomes grams. Known products (a per_100 given, a barcode in the product book) keep their own numbers.
 - a whole recipe: everything its ingredients add up to, for checking the numbers a recipe came with (checks.py).
 
 Every answer is per what was eaten, with per_100 and grams when they are known, and nothing is saved to the diary here.
@@ -28,8 +30,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import MAX_IMAGE_BYTES, MEALS, NUM, OFF_FIELDS, OFF_URL, OFF_USER_AGENT, PHOTO_DAYS, PHOTO_DIR
-from .diary import Book, given, num, values_of
+from .batches import cooked_factor
+from .const import MACROS, MAX_IMAGE_BYTES, MEALS, NUM, OFF_FIELDS, OFF_URL, OFF_USER_AGENT, PHOTO_DAYS, PHOTO_DIR
+from .diary import Book, given, num, unknown_in, values_of
 
 _LOGGER = logging.getLogger(__name__)
 LABELS = {
@@ -107,6 +110,19 @@ PHOTO_STRUCTURE = {
         "selector": {"object": {"fields": ITEM_FIELDS, "multiple": True}},
     },
 }
+# a batch's raw ingredients, one item each in the order asked, with how much cooking changes each one's weight
+INGREDIENT_FIELDS = {
+    "name": {"required": True, "selector": {"text": {}}},
+    "grams": {"required": True, "selector": NUMBER},
+    **{f"{k}_100": {"required": True, "selector": NUMBER} for k in LABELS},
+    "cooked_factor": {"required": True, "selector": {"number": {"min": 0.2, "max": 4, "step": 0.05, "mode": "box"}}},
+}
+INGREDIENTS_STRUCTURE = {
+    "items": {
+        "description": "Each ingredient, in the order given: its raw weight, raw numbers per 100 g and cooked_factor",
+        "selector": {"object": {"fields": INGREDIENT_FIELDS, "multiple": True}},
+    },
+}
 AMOUNT_STRUCTURE = {
     "eaten_g": {"description": "How many g or ml were eaten (0 if it can't be worked out)", "required": True, "selector": NUMBER},
 }
@@ -148,6 +164,15 @@ DISH_PROMPT = (
     "Estimate the nutrition for ONE portion of this home-cooked dish. The INGREDIENTS are {per}. Give calories, protein, "
     "carbohydrates, fat and fibre in grams for one portion.\n\nDISH: {name}\nINGREDIENTS: {ingredients}"
 )
+INGREDIENTS_PROMPT = (
+    "These are the RAW ingredients {who} put in a pot to cook a batch of {name}{where}. For each one, in the same order, "
+    "one item each: name (as given), grams (its raw weight: the grams given; else worked out from the amount, like "
+    '"1 onion" or "2 tins", with usual sizes{where}), its calories, protein, carbohydrates, fat and fibre per 100 g RAW '
+    "(kcal_100, protein_g_100, carbs_g_100, fat_g_100, fibre_g_100) and cooked_factor: its weight after cooking divided by "
+    "its raw weight (dry pasta, rice and grains take up water, about 2 to 2.5; meat loses fat and water, about 0.7; "
+    "onions and vegetables soften, about 0.8; a tin of tomatoes or stock simmers down, about 0.7; oil and spices about 1).\n"
+    "INGREDIENTS:\n{lines}"
+)
 DISH_NAME_PROMPT = "Estimate the nutrition for ONE normal home-cooked portion{where} of: {name}."
 WHOLE_PROMPT = (
     "Add up the nutrition of ALL these ingredients together, in the amounts listed: the whole lot, NOT one portion. Count "
@@ -181,6 +206,45 @@ def items_of(x: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return out[:12]
+
+
+def ingredient_line(n: int, i: dict[str, Any]) -> str:
+    """One ingredient as the AI is asked about it: "1. Onion: 1 onion" or "2. Spaghetti: 500 g"."""
+    amount = f"{num(i['grams']):g} g" if num(i.get("grams")) > 0 else str(i.get("amount") or "").strip()[:60] or "a usual amount"
+    return f"{n}. {str(i['name']).strip()[:80]}: {amount}"
+
+
+def answer_for(asked: dict[str, Any], n: int, answers: list[Any]) -> dict[str, Any]:
+    """The AI's item for an ingredient: the one with its name, else the one in its place."""
+    items = [a for a in answers if isinstance(a, dict)]
+    name = str(asked["name"]).strip().lower()
+    by_name = next((a for a in items if str(a.get("name") or "").strip().lower() == name), None)
+    return by_name or (answers[n] if n < len(answers) and isinstance(answers[n], dict) else {})
+
+
+def per_100_of(x: dict[str, Any]) -> tuple[dict[str, float], list[str]]:
+    """Numbers per 100 written as kcal_100, protein_g_100, … (the AI, the product book) and the macros not given."""
+    return {k: round(num(x.get(f"{k}_100")), 1) for k in NUM}, [k for k in MACROS if not given(x.get(f"{k}_100"))]
+
+
+def ingredient_result(asked: dict[str, Any], x: dict[str, Any], known: dict[str, Any] | None) -> dict[str, Any]:
+    """One ingredient: the grams given (else the AI's from the amount), raw per_100 (a known product's own, else the
+    AI's), cooked_factor (0.2 to 4) and `unknown` when a macro isn't known."""
+    if isinstance(asked.get("per_100"), dict) and num(asked["per_100"].get("kcal")):
+        per_100, unknown = (
+            {k: round(num(asked["per_100"].get(k)), 1) for k in NUM},
+            unknown_in(asked["per_100"], asked.get("unknown")),
+        )
+    else:
+        per_100, unknown = per_100_of(known or x)
+    grams = num(asked.get("grams")) or num(x.get("grams"))
+    return {
+        "name": str(asked["name"]).strip()[:80],
+        "grams": round(grams),
+        "per_100": per_100,
+        "cooked_factor": cooked_factor(x.get("cooked_factor")),
+        **({"unknown": unknown} if unknown else {}),
+    }
 
 
 def meals_of(x: dict[str, Any]) -> dict[str, list[str]]:
@@ -405,6 +469,29 @@ class Estimator:
             FIT_STRUCTURE,
         )
         return {**self._meal(x, "text"), **meals_of(x)}
+
+    async def ingredients(self, items: list[dict[str, Any]], name: str = "") -> dict[str, Any]:
+        """A batch's raw ingredients worked out in one AI call: {"items": [{name, grams, per_100, cooked_factor, unknown?}]}."""
+        if not items:
+            raise ServiceValidationError("Add the ingredients (items).")
+        x = await self._ai(
+            "estimate ingredients",
+            INGREDIENTS_PROMPT.format(
+                who=self.who,
+                name=str(name or "a dish").strip()[:80],
+                where=self.where,
+                lines="\n".join(ingredient_line(n, i) for n, i in enumerate(items, 1)),
+            ),
+            INGREDIENTS_STRUCTURE,
+        )
+        answers = x.get("items") if isinstance(x.get("items"), list) else []
+        return {"items": [ingredient_result(i, answer_for(i, n, answers), self._known(i)) for n, i in enumerate(items)]}
+
+    def _known(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        """A product in the product book, by the barcode an ingredient came with (it keeps its label's numbers)."""
+        code = re.sub(r"\D", "", str(item.get("barcode") or ""))
+        known = self.products.get(code) if len(code) >= 8 else None
+        return known if known and num(known.get("kcal_100")) else None
 
     async def label(self, image: str, amount: str = "", barcode: str = "") -> dict[str, Any]:
         media = await self.save_photo(image)

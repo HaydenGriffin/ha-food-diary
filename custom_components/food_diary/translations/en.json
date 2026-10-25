@@ -105,7 +105,7 @@
         },
         "name": {
           "name": "Name",
-          "description": "What it is."
+          "description": "What it is. Leave out for a batch (source batch, ref its id): the batch's name."
         },
         "kcal": {
           "name": "Calories",
@@ -359,7 +359,7 @@
     },
     "estimate": {
       "name": "Estimate",
-      "description": "Work out what something is and its nutrition, without logging it: a meal photo, a label photo and amount, a barcode and amount, words, or a recipe.",
+      "description": "Work out what something is and its nutrition, without logging it: a meal photo, a label photo and amount, a barcode and amount, words, a recipe, or a batch's raw ingredients.",
       "fields": {
         "person": {
           "name": "Person",
@@ -367,7 +367,7 @@
         },
         "kind": {
           "name": "Kind",
-          "description": "photo, label, barcode, text or dish."
+          "description": "photo, label, barcode, text, dish or ingredients."
         },
         "image": {
           "name": "Photo",
@@ -395,7 +395,7 @@
         },
         "dish_name": {
           "name": "Recipe name",
-          "description": "The recipe's name (dish)."
+          "description": "The recipe's name (dish), or the batch's (ingredients)."
         },
         "ingredients": {
           "name": "Ingredients",
@@ -412,6 +412,10 @@
         "fresh": {
           "name": "Work it out again",
           "description": "Ignore the kept answer for this recipe."
+        },
+        "items": {
+          "name": "Ingredients to work out",
+          "description": "A batch's raw ingredients (ingredients), at most 30: each a name with grams, or an amount like 1 onion."
         }
       }
     },
@@ -522,6 +526,90 @@
         "saved_id": {
           "name": "Saved meal",
           "description": "Its id, from get_recent."
+        }
+      }
+    },
+    "save_batch": {
+      "name": "Save a batch",
+      "description": "Keeps a batch cooked from weighed raw ingredients, to log bowls of it by weight (the same name on the same day replaces it).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "name": {
+          "name": "Name",
+          "description": "What was cooked, like Chilli."
+        },
+        "date": {
+          "name": "Date",
+          "description": "The day it was cooked. Leave out for today."
+        },
+        "ingredients": {
+          "name": "Ingredients",
+          "description": "Each a name, raw grams, per_100 (raw) and cooked_factor (cooked / raw weight)."
+        },
+        "cooked_g": {
+          "name": "Cooked weight",
+          "description": "The whole pot weighed after cooking, in g. Leave out to estimate it from the ingredients."
+        },
+        "portions": {
+          "name": "Portions",
+          "description": "How many portions it made."
+        },
+        "recipe_id": {
+          "name": "Recipe id",
+          "description": "The recipe it was cooked from, if any."
+        }
+      }
+    },
+    "update_batch": {
+      "name": "Change a batch",
+      "description": "The pot's real cooked weight or how many portions it made; food logged from it follows.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "batch_id": {
+          "name": "Batch id",
+          "description": "The batch's id."
+        },
+        "cooked_g": {
+          "name": "Cooked weight",
+          "description": "The whole pot weighed after cooking, in g."
+        },
+        "portions": {
+          "name": "Portions",
+          "description": "How many portions it made."
+        }
+      }
+    },
+    "delete_batch": {
+      "name": "Delete a batch",
+      "description": "Forgets a batch. Food logged from it stays.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "batch_id": {
+          "name": "Batch id",
+          "description": "The batch's id."
+        }
+      }
+    },
+    "get_batches": {
+      "name": "Get batches",
+      "description": "Batches cooked lately, and the dishes batched before (one each, with its last batch).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "days": {
+          "name": "Days",
+          "description": "Batches cooked today and the days before, this many days in all. Default 5."
         }
       }
     },

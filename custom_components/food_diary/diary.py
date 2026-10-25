@@ -2,7 +2,8 @@
 
 Everything lives in Home Assistant's own storage (.storage/food_diary.<person>, .storage/food_diary.dishes and
 .storage/food_diary.products). A day is a list of entries; an entry keeps its numbers per portion and for what was eaten, so
-portions or grams can change later without asking the AI again.
+portions or grams can change later without asking the AI again. A person's saved meals and cooked batches (batches.py) are
+kept in their store too.
 
 Every entry has a revision (`rev`, 1 when made, one more on every change), so an app can say which version it is changing
 (`expected_rev`) and background work can tell that an entry changed while it waited. A create that comes with a `client_id`
@@ -218,6 +219,7 @@ class Diary:
             self.data["dismissed"] = stored.get("dismissed") or {}
             self.data["saved"] = stored.get("saved") or []
             self.data["client_ids"] = stored.get("client_ids") or {}
+            self.data["batches"] = stored.get("batches") or []  # batches.py
         for entries in self.data["days"].values():
             for e in entries:
                 e.setdefault("rev", 1)
@@ -666,6 +668,23 @@ class Diary:
                     changed += 1
         if changed:
             self.async_changed()
+        return changed
+
+    def follow_per_100(self, ref: str, source: str, per_100: dict[str, Any], unknown: list[str], start: str) -> int:
+        """A batch's numbers changed (its pot was weighed): its entries from `start` on whose numbers weren't edited take
+        the new per_100 (their grams stay)."""
+        changed = 0
+        for d in sorted(x for x in self.data["days"] if x >= start):
+            for e in self.entries(d):
+                if e.get("ref") != ref or e.get("source") != source or e.get("edited") or not e.get("per_100"):
+                    continue
+                if nums(e["per_100"]) != nums(per_100) or entry_unknown(e) != list(unknown):
+                    grams = num(e.get("grams"))
+                    e.update(per_100=nums(per_100), per_portion={k: round(num(per_100.get(k)) * grams / 100, 2) for k in NUM})
+                    e["unknown"] = list(unknown)
+                    self._recount(e)
+                    self._changed_entry(e)
+                    changed += 1
         return changed
 
     def delete(self, d: str, entry_id: str, dismiss: bool = True, expected_rev: int | None = None) -> dict[str, Any] | None:

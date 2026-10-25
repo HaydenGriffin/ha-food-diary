@@ -186,8 +186,8 @@ Entries returned by `get_day`, `get_recent` and `set_photo` also carry `image`. 
 
 `get_day` entries also carry `check` when their recipe's numbers [look wrong](#recipe-numbers-check).
 
-Each entry's `source` is one of `photo`, `label`, `barcode`, `text`, `dish`, `manual`, `again`, `saved`, `voice` or
-`import` (food brought over from another app).
+Each entry's `source` is one of `photo`, `label`, `barcode`, `text`, `dish`, `manual`, `again`, `saved`, `voice`,
+`import` (food brought over from another app) or `batch` (a bowl of a [batch](#batches), `ref` its id).
 `plan` is set only by the planner.
 
 ### Logging and changing
@@ -199,13 +199,13 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `person` | entity id | See [Choosing a diary](#choosing-a-diary). |
-| `name` | string | **Required.** |
+| `name` | string | **Required**, except for a batch (then the batch's name). |
 | `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | For one portion. |
 | `portions` | number | 0.05 to 50. Default 1. |
 | `meal` | meal | Defaults to the meal for the time of day (see below). |
 | `date` | date | |
 | `source` | string | One of the sources above. Default `manual`. |
-| `ref` | string | A recipe id (`dish_id`) or a saved meal id. |
+| `ref` | string | A recipe id (`dish_id`), a saved meal id, or a batch id (source `batch`). |
 | `note`, `barcode` | string | |
 | `per_100` | object | The five numbers per 100 g or 100 ml. |
 | `grams` | number | The amount eaten, used with `per_100`. |
@@ -216,6 +216,10 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 | `client_id` | string | See [Doing things once](#doing-things-once-and-revisions). |
 | `unknown` | list | Macros not known (`protein_g`, `carbs_g`, `fat_g`, `fibre_g`), as `estimate`, a saved meal or a recent food lists them. A macro left out is unknown too; see [Unknown numbers](#unknown-numbers). |
 | `plan_key` | string | Puts a deleted planned entry back (Undo): its `plan_key` as it was (`<date>|<meal>`, or a side's `<date>|<meal>|side:<n>`). Kept only when it matches `date` and `meal`; with it, `source` may be `plan`. A plan that [follows the diary](#a-plan-that-follows-the-diary) puts the meal back on the plan. |
+
+With `source: "batch"` and `ref` a batch id, `grams` is all a bowl needs: a missing `name` is the batch's, and a missing
+`per_100` is the batch's cooked `per_100` (with its `unknown`). An unknown batch id then fails with "That batch isn't
+there."
 
 The time-of-day meal is breakfast before 10:30, lunch before 14:30, snack before 17:30, dinner before 21:30, and snack
 after that.
@@ -397,6 +401,61 @@ Undoes one of the last ten copies. Undo history is lost on restart. Fields: `per
 
 **Response:** `{"ok": true}`.
 
+### Batches
+
+A batch is a pot cooked from weighed raw ingredients, eaten by the bowl in grams. Its totals are each raw ingredient's
+`per_100` × its grams. Cooking changes the weight but not the totals: each ingredient's `cooked_factor` (cooked weight /
+raw weight, 0.2 to 4; dry pasta about 2.2, mince about 0.7) gives the pot's weight when it wasn't weighed. A bowl is then
+the batch's cooked `per_100` × grams (`log_food` with `source: "batch"`). Batches are kept in each person's diary for 400
+days.
+
+#### `food_diary.save_batch` (response: optional)
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `person` | entity id | |
+| `name` | string | **Required.** The same name (any case) on the same day replaces that batch, keeping its id. |
+| `date` | date | The day it was cooked. |
+| `ingredients` | list | **Required**, 1 to 50: each `{name, grams, per_100, cooked_factor?, ref?, unknown?}`, raw. `cooked_factor` defaults to 1. A macro `per_100` leaves out (or `unknown` lists) is unknown. At least one needs grams. |
+| `cooked_g` | number | The whole pot weighed after cooking. Leave out to estimate it. |
+| `portions` | number | How many portions it made (0.5 to 100). |
+| `recipe_id` | string | The recipe it was cooked from. |
+
+**Response:**
+
+```json
+{"batch": {"id": "…", "name": "Chilli", "date": "<date>", "at": "…", "recipe_id"?: "…",
+           "ingredients": [{"name": "…", "grams": 500, "per_100": {<five numbers>}, "cooked_factor": 0.7, "ref"?: "…",
+                            "unknown"?: […]}],
+           "raw_g": 1400, "cooked_g": 1750, "cooked_estimated": true, "portions"?: 5,
+           "totals": {<five numbers>}, "per_100": {<five numbers>}, "unknown"?: […]},
+ "refreshed": 0}
+```
+
+`cooked_g` is the weighed weight, or Σ grams × `cooked_factor` (`cooked_estimated: true`). `per_100` is the cooked
+batch's: `totals` / `cooked_g` × 100. `unknown` lists a macro any ingredient lacks (its numbers are then a lower bound).
+`refreshed` counts the entries that took a replaced batch's new numbers (see `update_batch`).
+
+#### `food_diary.update_batch` (response: optional)
+
+The pot's real weight, weighed after all, or how many portions it made. Fields: `person`, `batch_id` (**required**),
+`cooked_g`, `portions`. Entries logged from the batch (source `batch`, `ref` its id) whose numbers weren't edited take
+its new `per_100`; their grams stay.
+
+**Response:** `{"batch": <batch>, "refreshed": <entries changed>}`.
+
+#### `food_diary.delete_batch` (response: optional)
+
+Forgets a batch; what was logged from it stays. Fields: `person`, `batch_id` (**required**). **Response:** `{"ok": true}`.
+
+#### `food_diary.get_batches` (response: only)
+
+Fields: `person`, `days` (1 to 400, default 5).
+
+**Response:** `{"recent": [<batch>], "regulars": [{"name": "…", "last": <batch>}]}`. `recent` is the batches cooked today
+and on the days before, `days` days in all, newest first. `regulars` is every dish batched before, one per name (any
+case), newest first, with its last batch: start a new one from its ingredients.
+
 ### Undoing a change made with other services
 
 A change that takes several services (say, new numbers for a recipe, which its entries then follow, plus an edit of
@@ -436,18 +495,19 @@ Works out what something is and its numbers. It doesn't log anything.
 | Field | Type | Notes |
 | --- | --- | --- |
 | `person` | entity id | Chooses whose AI setting is used. |
-| `kind` | `photo`, `label`, `barcode`, `text` or `dish` | **Required.** |
+| `kind` | `photo`, `label`, `barcode`, `text`, `dish` or `ingredients` | **Required.** |
 | `image` | string | Base64. Required for `photo` and `label`. |
 | `hint` | string | `photo` only. |
 | `amount` | string | For `label` and `barcode`, e.g. "3 biscuits", "50 g" or "half the pack". |
 | `barcode` | string | EAN or UPC digits. Required for `barcode`, optional for `label`. |
 | `text` | string | For `text`, e.g. "2 eggs on toast". |
 | `dish_id` | string | Required for `dish`. |
-| `dish_name` | string | `dish` only. |
+| `dish_name` | string | `dish`, or the batch's name for `ingredients`. |
 | `ingredients` | list of strings | `dish` only. |
 | `servings` | number | `dish` only. |
 | `amounts_per` | `recipe` or `portion` | `dish` only. |
 | `fresh` | boolean | `dish` only. Ignores the kept answer and asks again. |
+| `items` | list | `ingredients` only, 1 to 30: each `{name, grams?, amount?, barcode?, per_100?, unknown?}`. |
 
 The AI only reads values: what is on a label, and how much was eaten. The integration does all the arithmetic. Common
 amounts like "50 g", "3 biscuits" or "half the pack" are worked out without the AI.
@@ -461,6 +521,7 @@ amounts like "50 g", "3 biscuits" or "half the pack" are worked out without the 
 | `label` | `{name, per_100, grams, unit, serving_g, pack_g, guessed, note, <five numbers>, source: "label", barcode?}`. |
 | `barcode` | Like `label`, plus `source: "barcode"`, `barcode`, `product_source` and `image_url?`. |
 | `dish` | `{name, <five numbers>, source: "dish", ref: <dish_id>, nutrition_source}`. Freshly estimated answers also have `note` and `foods`. |
+| `ingredients` | `{items: [{name, grams, per_100, cooked_factor, unknown?}]}`, one per item asked, in order. |
 
 `meals` (photo and text): the meals the food is usually eaten as, most usual first (`breakfast`, `lunch`, `dinner`, `snack`),
 when the AI said; an app can use it to suggest where food goes when nobody picked a meal. `log_food` ignores it.
@@ -468,6 +529,11 @@ when the AI said; an app can use it to suggest where food goes when nobody picke
 `items` (photo, when it shows two or more separate things): each `{name, grams, unit, per_100, <five numbers>}`, about
 what that thing weighs and its numbers per 100 g (or ml). The meal's own numbers are then what the items add up to. To log
 them one by one, send each item's `per_100` and `grams` to `log_food`; an app can let the person correct each weight first.
+
+`ingredients` works out a batch's raw ingredients in one AI call: `grams` is the weight given, else the AI's reading of
+`amount` ("1 onion", "2 tins"); `per_100` is raw, and an item's own `per_100` (one of the person's foods) or a `barcode`
+in the product book keeps those numbers; `cooked_factor` is cooked weight / raw weight, 0.2 to 4. Send the items to
+`save_batch` as its `ingredients`.
 
 `note` (photo and text): what one portion is, with about what it weighs ("1 slice, about 40 g"), so an app can show the
 weight and scale it with the portions.
@@ -826,7 +892,7 @@ are trusted again for the ingredients of the time. The check appears on `get_dis
 ## Storage and privacy
 
 - **Diary data** lives in Home Assistant's `.storage` folder:
-  - `food_diary.<person>`: each person's diary, with its `client_id` ledger;
+  - `food_diary.<person>`: each person's diary, with its `client_id` ledger, saved meals and batches;
   - `food_diary.dishes`: the shared recipe book;
   - `food_diary.products`: barcodes learned from Open Food Facts or label photos.
 - **Photos sent for estimates** are kept for 30 days in local media, under `food_diary/`, so AI Task can attach them.
