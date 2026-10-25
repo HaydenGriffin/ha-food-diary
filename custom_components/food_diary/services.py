@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
+import math
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -36,17 +37,34 @@ if TYPE_CHECKING:
     from . import FoodDiaryData
 
 ATTR_PERSON = "person"
-NUMBERS = {vol.Optional(k): vol.All(vol.Coerce(float), vol.Range(min=0, max=20000)) for k in NUM}
+
+
+def finite(v: Any) -> float:
+    """A number that is a real amount: not NaN, not infinite, not too big for a float."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise vol.Invalid("expected a number") from err
+    if isinstance(v, bool) or not math.isfinite(f):
+        raise vol.Invalid("expected a number")
+    return f
+
+
+AMOUNT = vol.All(finite, vol.Range(min=0, max=20000))  # a nutrition number or a weight
+NUMBERS = {vol.Optional(k): AMOUNT for k in NUM}
 BASE = {vol.Optional(ATTR_PERSON): cv.entity_id}
 DATE = vol.Optional("date")
-PORTIONS = vol.All(vol.Coerce(float), vol.Range(min=0.05, max=50))
+PORTIONS = vol.All(finite, vol.Range(min=0.05, max=50))
 RECIPE_PORTIONS = vol.All(vol.Coerce(int), vol.Range(min=1, max=24))
 CLIENT_ID = vol.All(cv.string, vol.Match(r"^[A-Za-z0-9_-]{8,64}$"))  # made by the app, once per action (a UUID is fine)
 EXPECTED_REV = vol.All(vol.Coerce(int), vol.Range(min=1))
 UNKNOWN = vol.All(cv.ensure_list, [vol.In(MACROS)])  # macros not known (sent back as an estimate or a saved meal gave them)
 
-PER_100 = vol.Schema({vol.Optional(k): vol.Coerce(float) for k in NUM}, extra=vol.REMOVE_EXTRA)
-GRAMS = vol.All(vol.Coerce(float), vol.Range(min=0, max=20000))
+PER_100 = vol.Schema(NUMBERS, extra=vol.REMOVE_EXTRA)
+BATCH_PER_100 = vol.Schema(  # kcal is needed (0 is fine: water)
+    {vol.Required(k) if k == "kcal" else vol.Optional(k): AMOUNT for k in NUM}, extra=vol.REMOVE_EXTRA
+)
+GRAMS = AMOUNT
 LOG_SCHEMA = vol.Schema(
     {
         **BASE,
@@ -79,7 +97,7 @@ UPDATE_SCHEMA = vol.Schema(
         DATE: cv.date,
         **NUMBERS,
         vol.Optional("portions"): PORTIONS,
-        vol.Optional("grams"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=20000)),
+        vol.Optional("grams"): vol.All(finite, vol.Range(min=0.1, max=20000)),
         vol.Optional("meal"): vol.In(MEALS),
         vol.Optional("name"): cv.string,
         vol.Optional("checked"): cv.boolean,
@@ -110,15 +128,15 @@ BATCH_INGREDIENT = vol.Schema(
     {
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=120)),
         vol.Required("grams"): GRAMS,
-        vol.Required("per_100"): PER_100,
-        vol.Optional("cooked_factor"): vol.Coerce(float),  # kept within 0.2 to 4
+        vol.Required("per_100"): BATCH_PER_100,
+        vol.Optional("cooked_factor"): finite,  # kept within 0.2 to 4
         vol.Optional("ref"): cv.string,
         vol.Optional("unknown"): UNKNOWN,
     },
     extra=vol.REMOVE_EXTRA,
 )
-COOKED_G = vol.All(vol.Coerce(float), vol.Range(min=1, max=50000))
-BATCH_PORTIONS = vol.All(vol.Coerce(float), vol.Range(min=0.5, max=100))
+COOKED_G = vol.All(finite, vol.Range(min=1, max=50000))
+BATCH_PORTIONS = vol.All(finite, vol.Range(min=0.5, max=100))
 SAVE_BATCH_SCHEMA = vol.Schema(
     {
         **BASE,
@@ -147,7 +165,7 @@ ESTIMATE_SCHEMA = vol.Schema(
         vol.Optional("dish_id"): cv.string,
         vol.Optional("dish_name", default=""): cv.string,
         vol.Optional("ingredients", default=[]): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional("servings", default=0): vol.Coerce(float),
+        vol.Optional("servings", default=0): vol.All(finite, vol.Range(min=0, max=100)),
         vol.Optional("amounts_per", default="recipe"): vol.In(("recipe", "portion")),
         vol.Optional("fresh", default=False): cv.boolean,
         vol.Optional("items", default=[]): vol.All(cv.ensure_list, vol.Length(max=30), [ESTIMATE_ITEM]),
@@ -173,13 +191,17 @@ COPY_SCHEMA = vol.Schema(
     }
 )
 UNCOPY_SCHEMA = vol.Schema({**BASE, vol.Required("token"): cv.string})
+MAX_FOODS = 50
+SAVED_FOOD = vol.Schema(  # one food of save_meal's `foods`, as log_food takes it (only these are kept)
+    {vol.Required("name"): cv.string, **NUMBERS, vol.Optional("unknown"): UNKNOWN}, extra=vol.REMOVE_EXTRA
+)
 SAVE_MEAL_SCHEMA = vol.Schema(
     {
         **BASE,
         vol.Required("name"): cv.string,
         DATE: cv.date,
         vol.Required("meal"): vol.In(MEALS),
-        vol.Optional("foods"): vol.All(cv.ensure_list, [vol.Schema({vol.Required("name"): cv.string}, extra=vol.ALLOW_EXTRA)]),
+        vol.Optional("foods"): vol.All(cv.ensure_list, vol.Length(max=MAX_FOODS), [SAVED_FOOD]),
     }
 )
 SAVED_SCHEMA = vol.Schema({**BASE, vol.Required("saved_id"): cv.string})
@@ -194,8 +216,8 @@ DISH_SCHEMA = vol.Schema({vol.Required("dish_id"): cv.string})
 DISH_SET_SCHEMA = vol.Schema(
     {
         vol.Required("dish_id"): cv.string,
-        vol.Required("kcal"): vol.Coerce(float),
-        **{vol.Optional(k): vol.Coerce(float) for k in NUM if k != "kcal"},
+        vol.Required("kcal"): AMOUNT,
+        **{vol.Optional(k): AMOUNT for k in NUM if k != "kcal"},
         vol.Optional("source", default="own"): vol.In(DISH_SOURCES),
         vol.Optional("portions"): RECIPE_PORTIONS,
     }
@@ -327,16 +349,16 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def log_food(call: ServiceCall) -> ServiceResponse:
         data = resolve(hass, call)
         f = dict(call.data)
-        from_batch(data.diary, f)
-        if not str(f.get("name") or "").strip():
-            raise ServiceValidationError("Give the food's name.")
-        if not num(f.get("kcal")) and not (f.get("per_100") and num(f.get("grams"))):
-            raise ServiceValidationError("Give kcal, or per_100 with grams.")
         day = f.pop("date").isoformat() if f.get("date") else today()
         if f.get("source") == "plan" and not f.get("plan_key"):
             f["source"] = "again"  # only the plan's own entries (and Undo putting one back) are "plan"
 
         async def create() -> dict[str, Any]:
+            from_batch(data.diary, f)  # after the client_id check: a retry still answers once the batch is gone
+            if not str(f.get("name") or "").strip():
+                raise ServiceValidationError("Give the food's name.")
+            if not num(f.get("kcal")) and not (f.get("per_100") and num(f.get("grams"))):
+                raise ServiceValidationError("Give kcal, or per_100 with grams.")
             if f.get("photo"):  # the meal photo it was estimated from: kept with the entry
                 f["photo"] = await hass.data[DOMAIN]["photos"].keep_estimated(f["photo"])
             e = data.diary.add(day, f)
@@ -427,8 +449,6 @@ def async_register_services(hass: HomeAssistant) -> None:
         return {"ok": True}
 
     async def save_batch(call: ServiceCall) -> ServiceResponse:
-        if not any(i["grams"] > 0 for i in call.data["ingredients"]):
-            raise ServiceValidationError("Give each ingredient's raw weight (grams).")
         batch, refreshed = Batches(resolve(hass, call).diary).save(dict(call.data), day_of(call))
         return {"batch": batch, "refreshed": refreshed}
 
@@ -444,7 +464,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         return {"ok": True}
 
     async def get_batches(call: ServiceCall) -> ServiceResponse:
-        batches = Batches(resolve(hass, call).diary).all
+        batches = Batches(resolve(hass, call).diary).prune()
         return {"recent": recent(batches, today(), call.data["days"]), "regulars": regulars(batches)}
 
     async def get_week_review(call: ServiceCall) -> ServiceResponse:

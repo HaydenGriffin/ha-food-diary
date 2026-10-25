@@ -200,14 +200,14 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 | --- | --- | --- |
 | `person` | entity id | See [Choosing a diary](#choosing-a-diary). |
 | `name` | string | **Required**, except for a batch (then the batch's name). |
-| `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | For one portion. |
+| `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | For one portion, 0 to 20000 (not NaN or infinite; the same for every number below). |
 | `portions` | number | 0.05 to 50. Default 1. |
 | `meal` | meal | Defaults to the meal for the time of day (see below). |
 | `date` | date | |
 | `source` | string | One of the sources above. Default `manual`. |
 | `ref` | string | A recipe id (`dish_id`), a saved meal id, or a batch id (source `batch`). |
 | `note`, `barcode` | string | |
-| `per_100` | object | The five numbers per 100 g or 100 ml. |
+| `per_100` | object | The five numbers per 100 g or 100 ml, each 0 to 20000. |
 | `grams` | number | The amount eaten, used with `per_100`. |
 | `unit` | `g` or `ml` | |
 | `edited` | boolean | Marks the numbers as typed by hand. |
@@ -219,7 +219,7 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 
 With `source: "batch"` and `ref` a batch id, `grams` is all a bowl needs: a missing `name` is the batch's, and a missing
 `per_100` is the batch's cooked `per_100` (with its `unknown`). An unknown batch id then fails with "That batch isn't
-there."
+there.", except for a retry with the same `client_id`, which still returns the first result.
 
 The time-of-day meal is breakfast before 10:30, lunch before 14:30, snack before 17:30, dinner before 21:30, and snack
 after that.
@@ -353,7 +353,7 @@ with an existing name replaces that saved meal.
 | `name` | string | **Required.** |
 | `date` | date | Ignored with `foods`. |
 | `meal` | meal | **Required.** |
-| `foods` | list | Each `{name, <five numbers>, unknown?}`, as `log_food` takes them: saved as they are, whatever else that meal holds. Foods without calories are left out. |
+| `foods` | list | At most 50, each `{name, <five numbers>, unknown?}`, as `log_food` takes them (numbers 0 to 20000): saved as they are, whatever else that meal holds. Foods without calories are left out; other fields are ignored. |
 
 **Response:**
 
@@ -407,7 +407,7 @@ A batch is a pot cooked from weighed raw ingredients, eaten by the bowl in grams
 `per_100` × its grams. Cooking changes the weight but not the totals: each ingredient's `cooked_factor` (cooked weight /
 raw weight, 0.2 to 4; dry pasta about 2.2, mince about 0.7) gives the pot's weight when it wasn't weighed. A bowl is then
 the batch's cooked `per_100` × grams (`log_food` with `source: "batch"`). Batches are kept in each person's diary for 400
-days.
+days: older ones go when the diary loads, on `get_batches` and on `save_batch`.
 
 #### `food_diary.save_batch` (response: optional)
 
@@ -416,7 +416,7 @@ days.
 | `person` | entity id | |
 | `name` | string | **Required.** The same name (any case) on the same day replaces that batch, keeping its id. |
 | `date` | date | The day it was cooked. |
-| `ingredients` | list | **Required**, 1 to 50: each `{name, grams, per_100, cooked_factor?, ref?, unknown?}`, raw. `cooked_factor` defaults to 1. A macro `per_100` leaves out (or `unknown` lists) is unknown. At least one needs grams. |
+| `ingredients` | list | **Required**, 1 to 50: each `{name, grams, per_100, cooked_factor?, ref?, unknown?}`, raw. `per_100` needs `kcal` (0 is fine, for water); its numbers and `grams` are 0 to 20000. `cooked_factor` defaults to 1. A macro `per_100` leaves out (or `unknown` lists) is unknown. Together they weigh at least 1 g ("Give each ingredient's raw weight (grams)." otherwise). |
 | `cooked_g` | number | The whole pot weighed after cooking. Leave out to estimate it. |
 | `portions` | number | How many portions it made (0.5 to 100). |
 | `recipe_id` | string | The recipe it was cooked from. |
@@ -526,13 +526,20 @@ amounts like "50 g", "3 biscuits" or "half the pack" are worked out without the 
 `meals` (photo and text): the meals the food is usually eaten as, most usual first (`breakfast`, `lunch`, `dinner`, `snack`),
 when the AI said; an app can use it to suggest where food goes when nobody picked a meal. `log_food` ignores it.
 
-`items` (photo, when it shows two or more separate things): each `{name, grams, unit, per_100, <five numbers>}`, about
-what that thing weighs and its numbers per 100 g (or ml). The meal's own numbers are then what the items add up to. To log
-them one by one, send each item's `per_100` and `grams` to `log_food`; an app can let the person correct each weight first.
+`items` (photo, when it shows two or more separate things): each `{name, grams, unit, per_100, <five numbers>, unknown?}`,
+about what that thing weighs and its numbers per 100 g (or ml); `unknown` lists a macro the AI didn't give for it (0 in
+its numbers). The meal's own numbers are then what the items add up to, and its `unknown` is every macro an item lacks.
+When the AI listed something that couldn't be used (no name, calories or weight) or more than 12 things, the items that
+could are still returned with `items_partial: true`, and the meal keeps the AI's estimate for the whole plate, so it can
+be more than the items add up to. To log them one by one, send each item's `per_100` and `grams` to `log_food`; an app
+can let the person correct each weight first.
 
 `ingredients` works out a batch's raw ingredients in one AI call: `grams` is the weight given, else the AI's reading of
 `amount` ("1 onion", "2 tins"); `per_100` is raw, and an item's own `per_100` (one of the person's foods) or a `barcode`
-in the product book keeps those numbers; `cooked_factor` is cooked weight / raw weight, 0.2 to 4. Send the items to
+in the product book keeps those numbers (a 0 among them, like water's calories, is kept); `cooked_factor` is cooked
+weight / raw weight, 0.2 to 4. The AI's answer is matched to the ingredients by their number in the list (by name only
+where one ingredient has it). When the answer leaves any ingredient out, or without a weight or calories, nothing is
+returned: it fails with "I couldn't work out <names>. Try again, or give their weight and numbers." Send the items to
 `save_batch` as its `ingredients`.
 
 `note` (photo and text): what one portion is, with about what it weighs ("1 slice, about 40 g"), so an app can show the

@@ -20,6 +20,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.typing import ConfigType
 
+from .batches import Batches
 from .checks import Checker
 from .const import (
     CONF_AI_TASK,
@@ -88,6 +89,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FoodDiaryConfigEntry) ->
     name = person_name(hass, person)
     diary = Diary(hass, person_key(person))
     await diary.async_load()
+    Batches(diary).prune()
     books = hass.data[DOMAIN]
     options = entry.options
     source = async_resolve(hass, dict(options))

@@ -6,7 +6,8 @@ ingredient's `cooked_factor` (cooked weight / raw weight) gives the pot's weight
 cooked_factor); a weighed `cooked_g` wins. A bowl of it is the batch's cooked per_100 × grams, logged with source "batch"
 and ref the batch id.
 
-Batches are kept in each person's diary for KEEP_DAYS; the same name on the same day is the same batch (it replaces).
+Batches are kept in each person's diary for KEEP_DAYS (older ones go when the diary loads, on get_batches and on a
+save); the same name on the same day is the same batch (it replaces). A pot needs at least MIN_RAW_G of ingredients.
 """
 
 from __future__ import annotations
@@ -15,12 +16,15 @@ from datetime import date, timedelta
 from typing import Any
 import uuid
 
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 
 from .const import MACROS, NUM
 from .diary import Diary, given, num, nums, today, unknown_in
 
 KEEP_DAYS = 400
+MIN_RAW_G = 1
+NO_WEIGHT = "Give each ingredient's raw weight (grams)."
 FACTOR_MIN, FACTOR_MAX = 0.2, 4.0
 
 
@@ -46,13 +50,19 @@ def ingredient(f: dict[str, Any]) -> dict[str, Any]:
 def counted(b: dict[str, Any]) -> dict[str, Any]:
     """The batch's weights and numbers worked out again from its ingredients (and its weighed cooked_g, if any)."""
     items = b["ingredients"]
-    b["raw_g"] = round(sum(i["grams"] for i in items), 1)
+    raw = sum(i["grams"] for i in items)
+    if raw < MIN_RAW_G:
+        raise ServiceValidationError(NO_WEIGHT)
+    b["raw_g"] = round(raw, 1)
     if b.get("cooked_estimated", True):
-        b["cooked_g"] = round(sum(i["grams"] * i["cooked_factor"] for i in items))
+        cooked = sum(i["grams"] * i["cooked_factor"] for i in items)  # unrounded: cooked_g is only for showing
+        b["cooked_g"] = round(cooked)
         b["cooked_estimated"] = True
-    b["totals"] = {k: round(sum(i["per_100"][k] * i["grams"] / 100 for i in items), 1) for k in NUM}
-    cooked = num(b["cooked_g"]) or b["raw_g"]
-    b["per_100"] = {k: round(b["totals"][k] / cooked * 100, 2) for k in NUM}
+    else:
+        cooked = num(b["cooked_g"])
+    totals = {k: sum(i["per_100"][k] * i["grams"] / 100 for i in items) for k in NUM}
+    b["totals"] = {k: round(v, 1) for k, v in totals.items()}
+    b["per_100"] = {k: round(totals[k] / cooked * 100, 2) for k in NUM}
     u = [k for k in MACROS if any(k in i.get("unknown", ()) for i in items)]  # a macro any ingredient lacks
     if u:
         b["unknown"] = u
@@ -112,6 +122,13 @@ class Batches:
     @property
     def all(self) -> list[dict[str, Any]]:
         return self.diary.data.setdefault("batches", [])
+
+    def prune(self) -> list[dict[str, Any]]:
+        """Forget the batches older than KEEP_DAYS (on load and on get_batches); returns the ones kept."""
+        if len(left := kept(self.all, today())) != len(self.all):
+            self.diary.data["batches"] = left
+            self.diary.async_changed()
+        return left
 
     def get(self, batch_id: str) -> dict[str, Any] | None:
         return next((b for b in self.all if b["id"] == batch_id), None)

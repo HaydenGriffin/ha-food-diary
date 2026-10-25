@@ -12,6 +12,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
+import voluptuous as vol
 
 from custom_components.food_diary.const import DOMAIN, OFF_URL
 from custom_components.food_diary.estimate import amount_grams, label_result, off_product
@@ -347,23 +348,17 @@ def item(name: str, grams: float, kcal_100: float, protein_100: float = 0, unit:
     }
 
 
+PLATE = [
+    item("Chicken thigh, roasted", 140, 213, 26),
+    item("Roast potatoes", 160, 145, 2.2),
+    item("Gravy", 60, 255, 0, unit="ml"),
+]
+
+
 async def test_a_photo_lists_each_thing_with_its_weight(hass: HomeAssistant, setup, ai_calls, monkeypatch):
     """1.8.0: each thing on the plate, with about what it weighs, so an app can show and correct each one."""
     monkeypatch.setitem(
-        AI_ANSWERS,
-        "estimate a meal from a photo",
-        {
-            **AI_ANSWERS["estimate a meal from a photo"],
-            "items": [
-                item("Chicken thigh, roasted", 140, 213, 26),
-                item("Roast potatoes", 160, 145, 2.2),
-                item("Gravy", 60, 255, 0, unit="ml"),
-                item("", 50, 100),
-                item("Air", 0, 100),
-                item("Plate", 200, 0),
-                "not an item",  # left out
-            ],
-        },
+        AI_ANSWERS, "estimate a meal from a photo", {**AI_ANSWERS["estimate a meal from a photo"], "items": PLATE}
     )
     out = await call(hass, "estimate", {"kind": "photo", "image": B64})
     assert [(i["name"], i["grams"], i["unit"]) for i in out["items"]] == [
@@ -375,8 +370,40 @@ async def test_a_photo_lists_each_thing_with_its_weight(hass: HomeAssistant, set
     assert out["kcal"] == round(298.2 + 232 + 153, 1) and out["protein_g"] == round(
         36.4 + 3.5, 1
     )  # the meal is what they add up to
+    assert "items_partial" not in out and "unknown" not in out
     assert "each separate food or drink you can see" in ai_calls[-1]["instructions"]
     assert ai_calls[-1]["structure"]["items"]["selector"]["object"]["multiple"] is True
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        [item("", 50, 100), item("Air", 0, 100), item("Plate", 200, 0), "not an item"],  # left out
+        [item(f"Pea {n}", 5, 80) for n in range(10)],  # 13 in all: past 12
+    ],
+)
+async def test_a_photo_with_items_left_out_keeps_the_meals_own_numbers(hass: HomeAssistant, setup, monkeypatch, extra):
+    """1.9.1: items left out (invalid, or past 12) don't shrink the meal; the items that are fine still come back."""
+    monkeypatch.setitem(
+        AI_ANSWERS, "estimate a meal from a photo", {**AI_ANSWERS["estimate a meal from a photo"], "items": [*PLATE, *extra]}
+    )
+    out = await call(hass, "estimate", {"kind": "photo", "image": B64})
+    assert out["kcal"] == 520 and out["protein_g"] == 32 and out["items_partial"] is True
+    assert [i["name"] for i in out["items"][:3]] == [i["name"] for i in PLATE] and len(out["items"]) <= 12
+
+
+async def test_a_photos_items_say_what_they_dont_know(hass: HomeAssistant, setup, monkeypatch):
+    """1.9.1: a macro an item doesn't give is unknown, not 0; the meal's unknown is the items' (not the whole answer's)."""
+    meal = {k: v for k, v in AI_ANSWERS["estimate a meal from a photo"].items() if k != "fibre_g"}  # fibre unknown here
+    chicken, potatoes = item("Chicken", 140, 213, 26), {**item("Potatoes", 160, 145, 2.2), "fat_g_100": None}
+    del potatoes["fibre_g_100"]
+    monkeypatch.setitem(AI_ANSWERS, "estimate a meal from a photo", {**meal, "items": [chicken, potatoes]})
+    out = await call(hass, "estimate", {"kind": "photo", "image": B64})
+    assert "unknown" not in out["items"][0] and out["items"][1]["unknown"] == ["fat_g", "fibre_g"]
+    assert out["unknown"] == ["fat_g", "fibre_g"]
+    meal_only = {**AI_ANSWERS["estimate a meal from a photo"], "fibre_g": None, "items": [chicken, item("Rice", 150, 130)]}
+    monkeypatch.setitem(AI_ANSWERS, "estimate a meal from a photo", meal_only)
+    assert "unknown" not in await call(hass, "estimate", {"kind": "photo", "image": B64})  # every item gives fibre
 
 
 async def test_one_thing_in_a_photo_is_no_items(hass: HomeAssistant, setup, ai_calls, monkeypatch):
@@ -410,3 +437,19 @@ async def test_save_these_foods_as_a_meal(hass: HomeAssistant, setup):
     assert saved["unknown"] == ["carbs_g", "fat_g", "fibre_g"]  # the potatoes didn't say
     with pytest.raises(ServiceValidationError):
         await call(hass, "save_meal", {"name": "Nothing", "meal": "dinner", "foods": [{"name": "Air", "kcal": 0}]})
+
+
+@pytest.mark.parametrize(
+    "foods",
+    [
+        [{"name": "Toast", "kcal": "nan"}],
+        [{"name": "Toast", "kcal": 100, "fat_g": -3}],
+        [{"name": "Toast", "kcal": float("inf")}],
+        [{"name": "Toast", "kcal": 10**400}],
+        [{"name": f"Food {n}", "kcal": 10} for n in range(51)],
+    ],
+)
+async def test_saved_foods_need_real_numbers_and_at_most_50(hass: HomeAssistant, setup, foods):
+    """1.9.1: save_meal's foods take numbers as log_food does (finite, 0 to 20000), and at most 50 of them."""
+    with pytest.raises(vol.Invalid):
+        await call(hass, "save_meal", {"name": "Odd", "meal": "dinner", "foods": foods})

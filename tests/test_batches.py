@@ -1,12 +1,13 @@
 """Batches (1.9.0): raw ingredients worked out in one AI call, a pot saved with its cooked numbers, bowls of it logged by
-weight, the pot weighed later, and the batches of lately and the regulars."""
+weight, the pot weighed later, and the batches of lately and the regulars. 1.9.1: incomplete answers, bad numbers, tiny
+pots and old batches."""
 
 from __future__ import annotations
 
 from datetime import timedelta
 
 from homeassistant.core import Context, HomeAssistant
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util import dt as dt_util
 import pytest
 import voluptuous as vol
@@ -212,3 +213,132 @@ async def test_batches_survive_a_restart_and_delete(hass: HomeAssistant, setup):
 async def test_a_batch_needs_weighed_ingredients(hass: HomeAssistant, setup):
     with pytest.raises(ServiceValidationError):
         await call(hass, "save_batch", {"name": "Air", "ingredients": [{"name": "Water", "grams": 0, "per_100": {"kcal": 0}}]})
+
+
+# ---------- 1.9.1: review fixes ----------
+
+
+def ingredients(*names):
+    return {"kind": "ingredients", "items": [{"name": n, "amount": "some"} for n in names]}
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"items": [ai_item("Oil", 30, 884, 1, fat_g=100)]},  # asked Rice then Oil, got only Oil
+        {"items": []},
+        {},
+        {"items": [{"name": "Rice", "grams": 300, "cooked_factor": 2.5}, ai_item("Oil", 30, 884, 1)]},  # no calories
+        {"items": [ai_item("Rice", 0, 350, 2.5), ai_item("Oil", 30, 884, 1)]},  # no weight
+    ],
+)
+async def test_an_incomplete_answer_is_refused(hass: HomeAssistant, setup, monkeypatch, answer):
+    monkeypatch.setitem(AI_ANSWERS, "estimate ingredients", answer)
+    with pytest.raises(HomeAssistantError, match="Rice"):
+        await call(hass, "estimate", ingredients("Rice", "Oil"))
+
+
+async def test_ingredients_are_matched_one_to_one_by_their_number(hass: HomeAssistant, setup, ai_calls, monkeypatch):
+    monkeypatch.setitem(
+        AI_ANSWERS,
+        "estimate ingredients",
+        {
+            "items": [
+                {**ai_item("Onion", 80, 40, 0.8), "n": 3},  # out of order, and two onions: the number says which
+                {**ai_item("Red onion", 150, 42, 0.8), "n": 1},  # renamed: still the first
+                {**ai_item("Rice", 300, 350, 2.5), "n": 2},
+                {**ai_item("Salt", 5, 0, 1), "n": "nan"},  # a number that isn't one: left over
+            ]
+        },
+    )
+    out = await call(hass, "estimate", ingredients("Onion", "Rice", "Onion"))
+    assert [(i["name"], i["grams"], i["per_100"]["kcal"]) for i in out["items"]] == [
+        ("Onion", 150, 42),
+        ("Rice", 300, 350),
+        ("Onion", 80, 40),
+    ]
+    assert ai_calls[-1]["structure"]["items"]["selector"]["object"]["fields"]["n"]["required"] is True
+
+
+async def test_two_ingredients_of_one_name_need_their_numbers(hass: HomeAssistant, setup, monkeypatch):
+    monkeypatch.setitem(
+        AI_ANSWERS, "estimate ingredients", {"items": [ai_item("Onion", 150, 40, 0.8), ai_item("Onion", 80, 40, 0.8)]}
+    )
+    with pytest.raises(HomeAssistantError, match="Onion, Onion"):
+        await call(hass, "estimate", ingredients("Onion", "Onion"))
+
+
+async def test_a_given_zero_is_kept(hass: HomeAssistant, setup, monkeypatch):
+    """Water: its own per_100 (or the product book's) with 0 kcal is 0, not the AI's guess."""
+    hass.data[DOMAIN]["products"].set("5000000000024", {"name": "Still water", "kcal_100": 0, "protein_g_100": 0})
+    monkeypatch.setitem(
+        AI_ANSWERS,
+        "estimate ingredients",
+        {"items": [{**ai_item("Water", 500, 15, 0.7), "n": 1}, {**ai_item("Still water", 500, 12, 0.7), "n": 2}]},
+    )
+    zero = {k: 0 for k in ("kcal", "protein_g", "carbs_g", "fat_g", "fibre_g")}
+    out = await call(
+        hass,
+        "estimate",
+        {
+            "kind": "ingredients",
+            "items": [
+                {"name": "Water", "grams": 500, "per_100": zero},
+                {"name": "Still water", "grams": 500, "barcode": "5000000000024"},
+            ],
+        },
+    )
+    water, bottled = out["items"]
+    assert water["per_100"] == zero and "unknown" not in water
+    assert bottled["per_100"]["kcal"] == 0 and bottled["unknown"] == ["carbs_g", "fat_g", "fibre_g"]
+
+
+@pytest.mark.parametrize(
+    "per_100",
+    [{"kcal": -5}, {"kcal": "nan"}, {"kcal": "inf"}, {"kcal": 10**400}, {"kcal": 100, "fat_g": float("-inf")}, {"fat_g": 3}],
+)
+async def test_batch_numbers_are_real_amounts(hass: HomeAssistant, setup, per_100):
+    with pytest.raises(vol.Invalid):
+        await call(hass, "save_batch", {"name": "Odd", "ingredients": [{"name": "Thing", "grams": 100, "per_100": per_100}]})
+    with pytest.raises(vol.Invalid):
+        await call(hass, "log_food", {"name": "Thing", "per_100": {**per_100, "kcal": "nan"}, "grams": 100})
+
+
+async def test_a_retried_bowl_answers_after_its_batch_is_deleted(hass: HomeAssistant, setup):
+    b = (await call(hass, "save_batch", bolognese()))["batch"]
+    bowl = {"source": "batch", "ref": b["id"], "grams": 350, "client_id": "bowl-of-pasta-1"}
+    first = await call(hass, "log_food", bowl)
+    await call(hass, "delete_batch", {"batch_id": b["id"]})
+    again = await call(hass, "log_food", bowl)
+    assert again["duplicate"] is True and again["entry_id"] == first["entry_id"]
+
+
+@pytest.mark.parametrize("grams", [0.01, 0.5])
+async def test_a_pot_needs_a_gram_of_ingredients(hass: HomeAssistant, setup, grams):
+    with pytest.raises(ServiceValidationError, match="raw weight"):
+        await call(hass, "save_batch", {"name": "Tiny", "ingredients": [{"name": "Saffron", "grams": grams, "per_100": MINCE}]})
+
+
+async def test_a_small_pot_keeps_its_precision(hass: HomeAssistant, setup):
+    b = (
+        await call(
+            hass,
+            "save_batch",
+            {"name": "Paste", "ingredients": [{"name": "Garlic", "grams": 1.2, "per_100": {"kcal": 100}, "cooked_factor": 0.3}]},
+        )
+    )["batch"]
+    assert b["cooked_g"] == 0 and b["per_100"]["kcal"] == round(1.2 / 0.36 * 100, 2)  # 0.36 g, not the 1.2 g raw
+
+
+async def test_old_batches_go_on_load_and_on_read(hass: HomeAssistant, setup):
+    diary = setup.runtime_data.diary
+    b = (await call(hass, "save_batch", bolognese()))["batch"]
+    old = (dt_util.now().date() - timedelta(days=KEEP_DAYS + 1)).isoformat()
+    diary.data["batches"].append({**b, "id": "old-soup", "name": "Lentil soup", "date": old})
+    assert [r["name"] for r in (await call(hass, "get_batches"))["regulars"]] == ["Pasta bake"]
+    assert [x["id"] for x in diary.data["batches"]] == [b["id"]]
+    diary.data["batches"].append({**b, "id": "old-soup", "name": "Lentil soup", "date": old})
+    await diary.async_flush()
+    await hass.config_entries.async_reload(setup.entry_id)
+    await hass.async_block_till_done()
+    assert [x["id"] for x in setup.runtime_data.diary.data["batches"]] == [b["id"]]

@@ -8,6 +8,7 @@
 - dish: a recipe's ingredients and servings; the answer is kept per dish so it is only worked out once.
 - ingredients: the raw ingredients of a batch (batches.py), each with its raw numbers per 100 g and how cooking changes its
   weight; "1 onion" becomes grams. Known products (a per_100 given, a barcode in the product book) keep their own numbers.
+  Answers are matched to ingredients by number; one left without a weight or calories fails the whole estimate.
 - a whole recipe: everything its ingredients add up to, for checking the numbers a recipe came with (checks.py).
 
 Every answer is per what was eaten, with per_100 and grams when they are known, and nothing is saved to the diary here.
@@ -112,6 +113,11 @@ PHOTO_STRUCTURE = {
 }
 # a batch's raw ingredients, one item each in the order asked, with how much cooking changes each one's weight
 INGREDIENT_FIELDS = {
+    "n": {
+        "description": "The ingredient's number in the list",
+        "required": True,
+        "selector": {"number": {"min": 1, "max": 50, "step": 1, "mode": "box"}},
+    },
     "name": {"required": True, "selector": {"text": {}}},
     "grams": {"required": True, "selector": NUMBER},
     **{f"{k}_100": {"required": True, "selector": NUMBER} for k in LABELS},
@@ -165,12 +171,13 @@ DISH_PROMPT = (
     "carbohydrates, fat and fibre in grams for one portion.\n\nDISH: {name}\nINGREDIENTS: {ingredients}"
 )
 INGREDIENTS_PROMPT = (
-    "These are the RAW ingredients {who} put in a pot to cook a batch of {name}{where}. For each one, in the same order, "
-    "one item each: name (as given), grams (its raw weight: the grams given; else worked out from the amount, like "
-    '"1 onion" or "2 tins", with usual sizes{where}), its calories, protein, carbohydrates, fat and fibre per 100 g RAW '
-    "(kcal_100, protein_g_100, carbs_g_100, fat_g_100, fibre_g_100) and cooked_factor: its weight after cooking divided by "
-    "its raw weight (dry pasta, rice and grains take up water, about 2 to 2.5; meat loses fat and water, about 0.7; "
-    "onions and vegetables soften, about 0.8; a tin of tomatoes or stock simmers down, about 0.7; oil and spices about 1).\n"
+    "These are the RAW ingredients {who} put in a pot to cook a batch of {name}{where}, numbered. For each one, in the "
+    "same order, one item each: n (its number in the list), name (as given), grams (its raw weight: the grams given; "
+    'else worked out from the amount, like "1 onion" or "2 tins", with usual sizes{where}), its calories, protein, '
+    "carbohydrates, fat and fibre per 100 g RAW (kcal_100, protein_g_100, carbs_g_100, fat_g_100, fibre_g_100) and "
+    "cooked_factor: its weight after cooking divided by its raw weight (dry pasta, rice and grains take up water, about 2 "
+    "to 2.5; meat loses fat and water, about 0.7; onions and vegetables soften, about 0.8; a tin of tomatoes or stock "
+    "simmers down, about 0.7; oil and spices about 1).\n"
     "INGREDIENTS:\n{lines}"
 )
 DISH_NAME_PROMPT = "Estimate the nutrition for ONE normal home-cooked portion{where} of: {name}."
@@ -185,27 +192,47 @@ WHOLE_STRUCTURE = {
 }
 
 
-def items_of(x: dict[str, Any]) -> list[dict[str, Any]]:
-    """The separate things in a photo: name, grams, unit, per_100 and what that weight comes to; at most 12, each with
-    calories and a weight (the rest are left out)."""
-    out = []
-    for i in x.get("items") or []:
-        if not isinstance(i, dict) or not (name := str(i.get("name") or "").strip()):
-            continue
-        grams, kcal_100 = num(i.get("grams")), num(i.get("kcal_100"))
-        if not (0 < grams <= 3000 and 0 < kcal_100 <= 900):
-            continue
-        per_100 = {k: round(num(i.get(f"{k}_100")), 1) for k in NUM}
-        out.append(
-            {
-                "name": name[:80],
-                "grams": round(grams),
-                "unit": "ml" if str(i.get("unit") or "").strip().lower() == "ml" else "g",
-                "per_100": per_100,
-                **{k: round(per_100[k] * grams / 100, 1) for k in NUM},
-            }
-        )
-    return out[:12]
+MAX_ITEMS = 12
+
+
+def photo_item(i: Any) -> dict[str, Any] | None:
+    """One thing in a photo: name, grams, unit, per_100, what that weight comes to and `unknown` (a macro the AI didn't
+    give); None without a name, calories or a weight."""
+    if not isinstance(i, dict) or not (name := str(i.get("name") or "").strip()):
+        return None
+    grams, kcal_100 = num(i.get("grams")), num(i.get("kcal_100"))
+    if not (0 < grams <= 3000 and 0 < kcal_100 <= 900):
+        return None
+    per_100, unknown = per_100_of(i)
+    return {
+        "name": name[:80],
+        "grams": round(grams),
+        "unit": "ml" if str(i.get("unit") or "").strip().lower() == "ml" else "g",
+        "per_100": per_100,
+        **{k: round(per_100[k] * grams / 100, 1) for k in NUM},
+        **({"unknown": unknown} if unknown else {}),
+    }
+
+
+def items_of(x: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+    """The separate things in a photo (at most MAX_ITEMS; the invalid ones left out) and whether they are all the AI
+    gave (none left out)."""
+    raw = x.get("items") if isinstance(x.get("items"), list) else []
+    items = [i for i in map(photo_item, raw) if i]
+    return items[:MAX_ITEMS], len(items) == len(raw) <= MAX_ITEMS
+
+
+def with_items(out: dict[str, Any], items: list[dict[str, Any]], complete: bool) -> dict[str, Any]:
+    """A photo's answer with its items (two or more). When they are everything the AI saw, the meal is what they add up
+    to (unknown: a macro any item lacks); when some were left out, the meal keeps its own estimate (`items_partial`)."""
+    if len(items) < 2:
+        return out
+    if not complete:
+        return {**out, "items": items, "items_partial": True}
+    out = {k: v for k, v in out.items() if k != "unknown"}
+    unknown = [k for k in MACROS if any(k in i.get("unknown", ()) for i in items)]
+    sums = {k: round(sum(i[k] for i in items), 1) for k in NUM}
+    return {**out, **sums, **({"unknown": unknown} if unknown else {}), "items": items}
 
 
 def ingredient_line(n: int, i: dict[str, Any]) -> str:
@@ -214,12 +241,27 @@ def ingredient_line(n: int, i: dict[str, Any]) -> str:
     return f"{n}. {str(i['name']).strip()[:80]}: {amount}"
 
 
-def answer_for(asked: dict[str, Any], n: int, answers: list[Any]) -> dict[str, Any]:
-    """The AI's item for an ingredient: the one with its name, else the one in its place."""
-    items = [a for a in answers if isinstance(a, dict)]
-    name = str(asked["name"]).strip().lower()
-    by_name = next((a for a in items if str(a.get("name") or "").strip().lower() == name), None)
-    return by_name or (answers[n] if n < len(answers) and isinstance(answers[n], dict) else {})
+def matched(asked: list[dict[str, Any]], answers: Any) -> list[dict[str, Any] | None]:
+    """The AI's item for each ingredient asked, one each: by its number `n` (1, 2, …) first, then by name where only one
+    ingredient asked and one answer left have it; None for an ingredient no answer is for."""
+    left = [a for a in (answers if isinstance(answers, list) else []) if isinstance(a, dict)]
+    out: list[dict[str, Any] | None] = [None] * len(asked)
+    for a in list(left):
+        n = num(a.get("n"))
+        if 1 <= n <= len(asked) and n == int(n) and out[int(n) - 1] is None:
+            out[int(n) - 1] = a
+            left.remove(a)
+
+    def key(v: Any) -> str:
+        return str(v.get("name") or "").strip().lower()
+
+    for idx, i in enumerate(asked):
+        if out[idx] is not None or [key(x) for x in asked].count(key(i)) != 1:
+            continue
+        if len(same := [a for a in left if key(a) == key(i)]) == 1:
+            out[idx] = same[0]
+            left.remove(same[0])
+    return out
 
 
 def per_100_of(x: dict[str, Any]) -> tuple[dict[str, float], list[str]]:
@@ -227,17 +269,21 @@ def per_100_of(x: dict[str, Any]) -> tuple[dict[str, float], list[str]]:
     return {k: round(num(x.get(f"{k}_100")), 1) for k in NUM}, [k for k in MACROS if not given(x.get(f"{k}_100"))]
 
 
-def ingredient_result(asked: dict[str, Any], x: dict[str, Any], known: dict[str, Any] | None) -> dict[str, Any]:
-    """One ingredient: the grams given (else the AI's from the amount), raw per_100 (a known product's own, else the
-    AI's), cooked_factor (0.2 to 4) and `unknown` when a macro isn't known."""
-    if isinstance(asked.get("per_100"), dict) and num(asked["per_100"].get("kcal")):
+def ingredient_result(asked: dict[str, Any], x: dict[str, Any], known: dict[str, Any] | None) -> dict[str, Any] | None:
+    """One ingredient: the grams given (else the AI's from the amount), raw per_100 (its own, a known product's, else the
+    AI's), cooked_factor (0.2 to 4) and `unknown` when a macro isn't known. None when its weight or its calories (given,
+    0 counts) are still missing."""
+    if isinstance(asked.get("per_100"), dict) and given(asked["per_100"].get("kcal")):  # its own: 0 is water
         per_100, unknown = (
             {k: round(num(asked["per_100"].get(k)), 1) for k in NUM},
             unknown_in(asked["per_100"], asked.get("unknown")),
         )
-    else:
+    elif given((known or x).get("kcal_100")):
         per_100, unknown = per_100_of(known or x)
-    grams = num(asked.get("grams")) or num(x.get("grams"))
+    else:
+        return None
+    if (grams := num(asked.get("grams")) or num(x.get("grams"))) <= 0:
+        return None
     return {
         "name": str(asked["name"]).strip()[:80],
         "grams": round(grams),
@@ -455,10 +501,7 @@ class Estimator:
             PHOTO_STRUCTURE,
             [media],
         )
-        out = {**self._meal(x, "photo"), **meals_of(x), "photo": media[0].rsplit("/", 1)[-1]}
-        if len(items := items_of(x)) > 1:  # several things: the meal is what they add up to, so the two always agree
-            out.update(items=items, **values_of({k: round(sum(i[k] for i in items), 1) for k in NUM}))
-        return out
+        return with_items({**self._meal(x, "photo"), **meals_of(x), "photo": media[0].rsplit("/", 1)[-1]}, *items_of(x))
 
     async def text(self, text: str) -> dict[str, Any]:
         if not str(text or "").strip():
@@ -471,7 +514,8 @@ class Estimator:
         return {**self._meal(x, "text"), **meals_of(x)}
 
     async def ingredients(self, items: list[dict[str, Any]], name: str = "") -> dict[str, Any]:
-        """A batch's raw ingredients worked out in one AI call: {"items": [{name, grams, per_100, cooked_factor, unknown?}]}."""
+        """A batch's raw ingredients worked out in one AI call: {"items": [{name, grams, per_100, cooked_factor, unknown?}]}.
+        Fails when the answer leaves any of them without a weight or calories."""
         if not items:
             raise ServiceValidationError("Add the ingredients (items).")
         x = await self._ai(
@@ -484,14 +528,19 @@ class Estimator:
             ),
             INGREDIENTS_STRUCTURE,
         )
-        answers = x.get("items") if isinstance(x.get("items"), list) else []
-        return {"items": [ingredient_result(i, answer_for(i, n, answers), self._known(i)) for n, i in enumerate(items)]}
+        found = [
+            ingredient_result(i, a, self._known(i)) if a is not None else None
+            for i, a in zip(items, matched(items, x.get("items")), strict=True)
+        ]
+        if missing := [str(i["name"]).strip()[:80] for i, r in zip(items, found, strict=True) if r is None]:
+            raise HomeAssistantError(f"I couldn't work out {', '.join(missing)}. Try again, or give their weight and numbers.")
+        return {"items": found}
 
     def _known(self, item: dict[str, Any]) -> dict[str, Any] | None:
         """A product in the product book, by the barcode an ingredient came with (it keeps its label's numbers)."""
         code = re.sub(r"\D", "", str(item.get("barcode") or ""))
         known = self.products.get(code) if len(code) >= 8 else None
-        return known if known and num(known.get("kcal_100")) else None
+        return known if known and given(known.get("kcal_100")) else None
 
     async def label(self, image: str, amount: str = "", barcode: str = "") -> dict[str, Any]:
         media = await self.save_photo(image)

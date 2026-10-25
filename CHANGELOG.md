@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.9.1 (25 Oct 2026)
+
+- `estimate` kind `ingredients` matches the AI's answer to each ingredient by its number (by name only when that name is
+  asked once), so a short answer can't give one ingredient's numbers to another. An answer that leaves an ingredient
+  out, or without a weight or calories, fails ("I couldn't work out Rice. …") instead of returning zeros. An ingredient's
+  own (or the product book's) 0 kcal is kept, not replaced by the AI's guess.
+- A photo's `items` each say which macros they don't know (`unknown`), and the meal's `unknown` is theirs. When some
+  things the AI listed couldn't be used (or there were more than 12), the meal keeps its whole-plate estimate and the
+  usable items come back with `items_partial: true`.
+- Numbers are checked everywhere they're taken: `per_100` (log_food, save_batch, estimate items), `save_meal`'s `foods`
+  (at most 50) and `set_dish_nutrition` refuse negative, NaN, infinite and too-big numbers. A batch ingredient's
+  `per_100` needs `kcal`, and a batch needs at least 1 g of ingredients; a tiny pot keeps its precision.
+- A retried `log_food` (same `client_id`) from a batch deleted since returns the first result instead of failing.
+- Batches older than 400 days go when the diary loads and on `get_batches`, not only when another batch is saved.
+
 ## 1.9.0 (25 Oct 2026)
 
 - Batches: a pot cooked from weighed raw ingredients, eaten by the bowl in grams. `save_batch` keeps it with its totals,
