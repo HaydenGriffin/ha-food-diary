@@ -15,7 +15,7 @@ MACROS = ("protein_g", "carbs_g", "fat_g", "fibre_g")
 MEALS = ("breakfast", "lunch", "dinner", "snack")
 # Where an entry's numbers came from. "plan" is only ever written by the meal planner; "import" is food brought over from
 # another app (its numbers are what the person logged there); "batch" is a bowl of a cooked batch (its ref the batch id).
-SOURCES = ("photo", "label", "barcode", "text", "dish", "manual", "again", "saved", "voice", "import", "batch")
+SOURCES = ("photo", "label", "barcode", "text", "dish", "manual", "again", "saved", "voice", "import", "batch", "estimate")
 # Where a recipe's per-portion numbers came from: typed by the person, printed on the recipe, estimated, or brought over
 # from another app where the person logged it.
 DISH_SOURCES = ("own", "recipe", "ai", "import")

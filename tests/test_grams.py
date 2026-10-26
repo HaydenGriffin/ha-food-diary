@@ -10,11 +10,13 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.util import dt as dt_util
 import pytest
 import voluptuous as vol
 
 from .conftest import AI_ANSWERS
 from .test_food_diary import B64, call
+from .test_planner import KATSU, plan, planner
 
 TASK = "estimate per 100 g"
 BREAD = {"kcal_100": 250, "protein_g_100": 9, "carbs_g_100": 41, "fat_g_100": 4, "fibre_g_100": 7, "unit": "g"}
@@ -349,3 +351,87 @@ async def test_undo_keeps_what_update_food_cant_change(hass: HomeAssistant, setu
     sent = {**out["before"], "photo": "../../secrets.yaml", "source": "label", "at": "2000-01-01T00:00", "client_id": "x"}
     back = (await call(hass, "restore_food", {"entry_id": e["id"], "entry": sent, "expected_rev": 2}))["entry"]
     assert back == {**out["before"], "rev": 3}
+
+
+# ---------- review fixes (1.10.0) ----------
+
+
+async def test_a_recipes_new_numbers_leave_an_entry_by_weight_alone(hass: HomeAssistant, setup):
+    """Diary.follow sets numbers per portion: an entry by weight keeps per_100 × grams."""
+    e = await logged(hass, source="dish", ref="ig-1")
+    await call(hass, "update_food", {"entry_id": e["id"], "per_100": {"kcal": 200}, "grams": 150})
+    out = await call(hass, "set_dish_nutrition", {"dish_id": "ig-1", "kcal": 500, "protein_g": 30})
+    now = stored(setup, e["id"])
+    assert out["refreshed"] == 0
+    assert (now["kcal"], now["grams"], now["per_portion"]["kcal"]) == (300, 150, 300)
+
+
+async def test_the_planner_leaves_a_planned_entry_by_weight_alone(hass: HomeAssistant, setup, ai_calls):
+    """Planner._refresh renumbers per portion: a planned entry switched to grams keeps per_100 × grams."""
+    d = dt_util.now().date().isoformat()
+    p = planner(hass, setup, [{"date": d, "dinner": "Chicken katsu curry"}], [KATSU])
+    await p.async_sync()
+    (e,) = setup.runtime_data.diary.entries(d)
+    await call(hass, "update_food", {"entry_id": e["id"], "per_100": {"kcal": 200}, "grams": 150})
+    plan(hass, [{"date": d, "dinner": "Chicken katsu curry"}], [{**KATSU, "nutrition": {**KATSU["nutrition"], "kcal": 500}}])
+    await p.async_sync()
+    now = stored(setup, e["id"])
+    assert (now["kcal"], now["grams"], now["per_portion"]["kcal"]) == (300, 150, 300)
+    assert setup.runtime_data.diary.renumber(d, e["id"], {"kcal": 500}, "r1", "") is None
+
+
+async def test_her_numbers_without_a_weight_cant_follow_a_new_one(hass: HomeAssistant, setup):
+    """An entry by weight from before 1.10.0 with 0 g: her corrected numbers are refused a new weight, never dropped."""
+    e = setup.runtime_data.diary.add(dt_util.now().date().isoformat(), {**SLICE, "per_100": PER_100, "grams": 0})
+    await call(hass, "update_food", {"entry_id": e["id"], "kcal": 130})
+    with pytest.raises(ServiceValidationError, match="aren't for a weight"):
+        await call(hass, "update_food", {"entry_id": e["id"], "grams": 50})
+    now = stored(setup, e["id"])
+    assert (now["kcal"], now["edited"], now["grams"]) == (130, True, 0)
+
+
+async def test_log_food_needs_a_weight_with_per_100(hass: HomeAssistant, setup):
+    with pytest.raises(ServiceValidationError, match="per_100 needs grams"):
+        await call(hass, "log_food", {**SLICE, "per_100": PER_100, "grams": 0})
+    with pytest.raises(ServiceValidationError, match="per_100 needs grams"):
+        await call(hass, "log_food", {**SLICE, "per_100": PER_100})
+    assert (await call(hass, "get_day"))["entries"] == []
+
+
+async def test_an_estimate_per_100_logs_as_it_came(hass: HomeAssistant, setup, monkeypatch):
+    """The estimate's source is one log_food takes, and its unknowns come along nested or at the top."""
+    est = await per_100(hass, monkeypatch, {**BREAD, "fibre_g_100": None})
+    for food in (
+        {"per_100": {**est["per_100"], "unknown": est["unknown"]}},
+        {"per_100": est["per_100"], "unknown": est["unknown"]},
+    ):
+        e = (
+            await call(hass, "log_food", {"name": est["name"], "source": est["source"], "grams": 60, "unit": est["unit"], **food})
+        )["entry"]
+        assert (e["source"], e["kcal"], e["unknown"], e["grams"]) == ("estimate", 150, ["fibre_g"], 60)
+
+
+async def test_water_is_logged_by_its_volume(hass: HomeAssistant, setup, monkeypatch):
+    water = await call_water(hass, monkeypatch)
+    e = (await call(hass, "log_food", {"name": "Water", "per_100": water["per_100"], "grams": 250, "unit": "ml"}))["entry"]
+    assert (e["kcal"], e["grams"], e["unit"], e["per_100"]["kcal"], "unknown" in e) == (0, 250, "ml", 0, False)
+
+
+async def test_log_food_per_100_needs_calories(hass: HomeAssistant, setup):
+    with pytest.raises(vol.Invalid):
+        await call(hass, "log_food", {"name": "Bread", "per_100": {"protein_g": 9}, "grams": 50})
+
+
+async def test_numbers_too_big_for_one_entry_are_refused_and_every_entry_restores(hass: HomeAssistant, setup):
+    e = await logged(hass, per_100=PER_100, grams=0.1)
+    await call(hass, "update_food", {"entry_id": e["id"], "kcal": 20000})  # hers, for 0.1 g
+    with pytest.raises(ServiceValidationError, match="too big"):
+        await call(hass, "update_food", {"entry_id": e["id"], "grams": 20000})  # 4,000,000,000 kcal
+    assert stored(setup, e["id"])["kcal"] == 20000 and stored(setup, e["id"])["grams"] == 0.1
+    out = await call(hass, "update_food", {"entry_id": e["id"], "grams": 4000})  # 800,000,000 kcal: the most is 10^9
+    assert out["entry"]["kcal"] == 800_000_000
+    rev = out["entry"]["rev"]
+    big = await call(hass, "update_food", {"entry_id": e["id"], "name": "Rye"})
+    assert big["before"]["kcal"] == 800_000_000
+    back = (await call(hass, "restore_food", {"entry_id": e["id"], "entry": big["before"], "expected_rev": rev + 1}))["entry"]
+    assert back == {**big["before"], "rev": rev + 2}

@@ -82,6 +82,7 @@ log_food:
           - voice
           - import
           - batch
+          - estimate
     ref:
       selector:
         text: {}

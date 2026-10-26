@@ -326,8 +326,9 @@ class Planner:
         self, d: str, meal: str, e: dict[str, Any], slot: dict[str, Any], dishes: list[dict[str, Any]], note: str = PLAN_NOTE
     ) -> int:
         """A planned entry takes the book's current numbers (completed, or newly arrived); never one whose numbers were
-        edited, one the person logged herself, nor one that changed (or whose slot did) while the numbers were worked out."""
-        if e.get("edited") or e.get("source") != "plan":
+        edited, one the person logged herself, one she changed to by weight (per_100 × grams: the book's numbers are per
+        portion), nor one that changed (or whose slot did) while the numbers were worked out."""
+        if e.get("edited") or e.get("source") != "plan" or e.get("per_100"):
             return 0
         before = self._slot_state(d, meal)
         found = await self._nutrition(slot, dishes)

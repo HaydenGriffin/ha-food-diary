@@ -49,6 +49,7 @@ STORE_VERSION = 1  # rev, client_id and the client_id ledger are additions older
 KEPT = ("estimate", "portions", "dismissed")  # a dish's book entry: kept through new numbers (see checks.py)
 # what update can change on an entry (besides its rev, and plan_key / plan_was, which follow its meal): put_back's fields
 UNDONE = ("name", "meal", "portions", "per_portion", *NUM, "per_100", "grams", "unit", "unknown", "edited", "checked")
+ENTRY_MAX = 1_000_000_000  # no entry's number goes over this (an update that would is refused): restore_food takes them all
 NOT_COPIED = ("id", "at", "rev", "client_id", "plan_key", "plan_was", "edited")  # a copied entry is a new entry
 _LOGGER = logging.getLogger(__name__)
 
@@ -174,6 +175,11 @@ def payload_hash(request: dict[str, Any]) -> str:
 def rev(e: dict[str, Any]) -> int:
     """An entry's revision (entries from before revisions count as 1)."""
     return int(e.get("rev") or 1)
+
+
+def too_big(e: dict[str, Any]) -> bool:
+    """Whether an entry's numbers (for what was eaten, or per portion) went over ENTRY_MAX."""
+    return any(num(e.get(k)) > ENTRY_MAX or num((e.get("per_portion") or {}).get(k)) > ENTRY_MAX for k in NUM)
 
 
 def conflict() -> ServiceValidationError:
@@ -539,12 +545,18 @@ class Diary:
         one portion times the portions. Macros the request doesn't give (or lists in `unknown`) are unknown; its `unknown`
         is stored as it is until _recount (or set_unknown) sees the entry's numbers."""
         portions = num(f.get("portions")) or 1.0
-        per_100 = nums(f["per_100"]) if isinstance(f.get("per_100"), dict) and num(f["per_100"].get("kcal")) else None
+        by_weight = isinstance(f.get("per_100"), dict) and given(f["per_100"].get("kcal"))  # 0 is water's
         grams = num(f.get("grams"))
-        if per_100 and grams:  # from a label or a barcode: what was eaten is per_100 x grams
-            per_portion = {k: round(per_100[k] * grams / 100, 2) for k in NUM}
+        per_100 = None
+        if by_weight and grams:  # by weight (a label, a barcode, an estimate per 100 g): per_100 x grams
             unknown = unknown_in(f["per_100"], f.get("unknown"))
+            per_100 = {k: 0.0 if k in unknown else v for k, v in nums(f["per_100"]).items()}  # an unknown is stored as 0
+            per_portion = {k: round(per_100[k] * grams / 100, 2) for k in NUM}
             portions = 1.0
+        elif by_weight:  # no weight (only from before 1.10.0; log_food needs one now): kept as it came
+            per_100 = nums(f["per_100"])
+            per_portion = nums(f.get("per_portion") or f)
+            unknown = unknown_in(f.get("per_portion") or f, f.get("unknown"))
         else:
             per_portion = nums(f.get("per_portion") or f)
             unknown = unknown_in(f.get("per_portion") or f, f.get("unknown"))
@@ -560,7 +572,7 @@ class Diary:
             "per_portion": per_portion,
             "unknown": unknown,
         }
-        if per_100:
+        if per_100 is not None:
             entry.update(per_100=per_100, grams=round(grams, 1), unit="ml" if f.get("unit") == "ml" else "g")
         for k in ("note", "barcode", "plan_key", "photo"):
             if f.get(k):
@@ -588,6 +600,7 @@ class Diary:
             if e["id"] != entry_id:
                 continue
             self._check_rev(e, expected_rev)
+            kept = copy.deepcopy(e)
             unknown = entry_unknown(e)
             if isinstance(f.get("per_100"), dict) and num(f.get("grams")):
                 unknown = self._by_weight(e, f)
@@ -613,6 +626,10 @@ class Diary:
                 else:
                     e.pop("checked", None)
             self._recount(e)
+            if too_big(e):  # put it back as it was: nothing changes
+                e.clear()
+                e.update(kept)
+                raise ServiceValidationError("That makes the numbers too big for one entry.")
             self._changed_entry(e)
             self._follow_edit(d, e, was_name, was_meal)
             self.async_changed()
@@ -645,7 +662,12 @@ class Diary:
         are for the amount it had and scale with it (and stay hers). One portion either way."""
         was = num(e.get("grams")) * (num(e.get("portions")) or 1.0)  # what the entry's numbers are for now
         grams = round(grams, 1)
-        if e.get("edited") and was > 0:
+        if e.get("edited") and was <= 0:  # never drop her numbers
+            raise ServiceValidationError(
+                "This entry's own numbers aren't for a weight (it has 0 g), so they can't follow a new one. "
+                "Switch it with per_100 and grams, or change its numbers."
+            )
+        if e.get("edited"):
             p = num(e.get("portions")) or 1.0
             e["per_portion"] = {k: round(num(e["per_portion"].get(k)) * p * grams / was, 2) for k in NUM}
         else:
@@ -700,8 +722,8 @@ class Diary:
         that waited on the AI), nothing changes when the entry changed meanwhile or its numbers are now the person's own:
         a newer edit always wins."""
         e = self.find(d, entry_id)
-        if e is None or (expected_rev is not None and (rev(e) != expected_rev or e.get("edited"))):
-            return None
+        if e is None or e.get("per_100") or (expected_rev is not None and (rev(e) != expected_rev or e.get("edited"))):
+            return None  # numbers per portion don't fit an entry by weight (per_100 × grams)
         e.update(per_portion=nums(values), ref=ref, note=note, unknown=unknown_in(values))
         self._recount(e)
         self._changed_entry(e)
@@ -709,11 +731,12 @@ class Diary:
         return e
 
     def follow(self, ref: str, values: dict[str, Any], start: str) -> int:
-        """A recipe's numbers changed: its entries from `start` on whose numbers weren't edited take them (portions stay)."""
+        """A recipe's numbers changed: its entries from `start` on whose numbers weren't edited take them (portions stay).
+        Entries by weight (per_100 × grams) keep theirs: the recipe's numbers are per portion."""
         changed = 0
         for d in sorted(x for x in self.data["days"] if x >= start):
             for e in self.entries(d):
-                if e.get("ref") != ref or e.get("edited"):
+                if e.get("ref") != ref or e.get("edited") or e.get("per_100"):
                     continue
                 if nums(e.get("per_portion")) != nums(values) or entry_unknown(e) != unknown_in(values):
                     e.update(per_portion=nums(values), unknown=unknown_in(values))

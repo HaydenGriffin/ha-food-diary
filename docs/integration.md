@@ -188,8 +188,8 @@ Entries returned by `get_day`, `get_recent` and `set_photo` also carry `image`. 
 `get_day` entries also carry `check` when their recipe's numbers [look wrong](#recipe-numbers-check).
 
 Each entry's `source` is one of `photo`, `label`, `barcode`, `text`, `dish`, `manual`, `again`, `saved`, `voice`,
-`import` (food brought over from another app) or `batch` (a bowl of a [batch](#batches), `ref` its id).
-`plan` is set only by the planner.
+`import` (food brought over from another app), `batch` (a bowl of a [batch](#batches), `ref` its id) or `estimate`
+(by weight from an `estimate` of kind `per_100`, 1.10.0). `plan` is set only by the planner.
 
 ### Logging and changing
 
@@ -208,8 +208,8 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 | `source` | string | One of the sources above. Default `manual`. |
 | `ref` | string | A recipe id (`dish_id`), a saved meal id, or a batch id (source `batch`). |
 | `note`, `barcode` | string | |
-| `per_100` | object | The five numbers per 100 g or 100 ml, each 0 to 20000. |
-| `grams` | number | The amount eaten, used with `per_100`. |
+| `per_100` | object | The five numbers per 100 g or 100 ml, each 0 to 20000. `kcal` is needed (0 is fine, for water: the entry is still by weight); a macro left out is unknown. It may carry its own `unknown` (1.10.0), like `update_food`'s; a macro listed there or in the top-level `unknown` is stored as 0. Needs `grams`. |
+| `grams` | number | The amount eaten, used with `per_100`: more than 0 ("per_100 needs grams: how much was eaten." otherwise, 1.10.0). |
 | `unit` | `g` or `ml` | |
 | `edited` | boolean | Marks the numbers as typed by hand. |
 | `photo` | string | The `photo` value an `estimate` returned. The picture is kept with the entry. |
@@ -242,7 +242,15 @@ Changes an existing entry.
 | `grams` | number | 0.1 to 20000. For entries that have `per_100` (or with `per_100`, below): the new amount, one portion. The numbers are `per_100 × grams`; numbers of your own (`edited`) are for the amount the entry had, so they scale with it (× new grams / old grams × portions) and stay `edited` (1.10.0; before, they were replaced by `per_100 × grams` and `edited` cleared). Unknown macros stay unknown. On an entry without `per_100`, `grams` alone does nothing. |
 | `per_100` | object | With `grams` only (1.10.0): the entry is by weight from now on. `{kcal, protein_g?, carbs_g?, fat_g?, fibre_g?, unknown?}`, each 0 to 20000, `kcal` needed (0 is fine); a macro left out or listed in its `unknown` is unknown (stored as 0). The entry gets this `per_100`, `unit` and `grams`, `portions: 1` and `per_portion = per_100 × grams / 100`; its name, meal, source, ref, note, photo, `client_id` and plan stay. Sent without `grams`: "per_100 needs grams: how much was eaten." Sent with `portions`, any of the five numbers or `unknown`: refused, as `per_100` and `grams` set them. |
 | `unit` | `g` or `ml` | With `per_100`: what it is per. Default `g`. |
-| `edited` | boolean | With `per_100`: `true` when it was worked out from the person's own corrected numbers, so the entry stays `edited` (recipe updates leave it alone). Left out or `false`: not `edited`. `unit` or `edited` without `per_100` is refused. |
+| `edited` | boolean | With `per_100`: `true` when it was worked out from the person's own corrected numbers, so the entry stays `edited`. Left out or `false`: not `edited`. `unit` or `edited` without `per_100` is refused. |
+
+An entry by weight (`per_100` × `grams`) keeps its numbers when its recipe's numbers change or the planner refreshes a
+planned meal, `edited` or not: those numbers are per portion (1.10.0). Its `ref` and plan stay.
+
+An update whose numbers would go over 1,000,000,000 (for the entry, or per portion) is refused ("That makes the numbers
+too big for one entry.") and changes nothing; your own numbers on an entry by weight with 0 g (logged before 1.10.0) can't
+follow a new `grams` ("This entry's own numbers aren't for a weight…"): switch it with `per_100` and `grams`, or change
+its numbers.
 | `meal` | meal | |
 | `name` | string | |
 | `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | Your own numbers for the **whole** entry. Sets `edited`. |
@@ -280,7 +288,7 @@ told as for an update: a meal moved back (`moved` or `restored`), a name put bac
 | `person` | entity id | |
 | `entry_id` | string | **Required.** |
 | `date` | date | The day the entry is on. |
-| `entry` | object | **Required.** `before` from `update_food`'s answer, as it was. Its numbers must be real (finite, 0 or more), `meal` one of the four, `unit` `g` or `ml`, and `per_100` and `grams` together; its `id`, when given, must be `entry_id`. |
+| `entry` | object | **Required.** `before` from `update_food`'s answer, as it was. Its numbers must be real (finite, 0 to 1,000,000,000, which every entry `update_food` makes stays under), `meal` one of the four, `unit` `g` or `ml`, and `per_100` and `grams` together; its `id`, when given, must be `entry_id`. |
 | `expected_rev` | integer | **Required.** The `rev` of `update_food`'s answer. If the entry has changed since (another change, the planner, a recipe's new numbers, a photo), nothing changes and the call fails with `conflict`. |
 
 **Response:** `{"entry": <entry>}`. Fails with "That entry isn't in the diary on that day." when it's gone (Undo doesn't
@@ -587,10 +595,28 @@ returned: it fails with "I couldn't work out <names>. Try again, or give their w
 served as the name says), or per 100 ml for a drink (`unit: "ml"`; g and ml are never converted). `name` is the name
 asked (its first 80 characters). Calories must be real (0 to 900, 0 for water): otherwise it fails with "I couldn't work out <name> per 100 g. Try
 again." A macro the AI leaves out, or gives as something that can't be (not a number, negative, over 100 per 100), is
-listed in `unknown` and is 0. Nothing is kept. To log it by weight, send `per_100`, `unit` and `grams` to `log_food`;
-to switch a logged entry, to `update_food`. Example: `{"kind": "per_100", "name": "Multigrain bread", "hint": "toasted"}`
-→ `{"name": "Multigrain bread", "per_100": {"kcal": 250.0, "protein_g": 9.0, "carbs_g": 41.0, "fat_g": 4.0,
-"fibre_g": 7.0}, "unit": "g", "source": "estimate"}`.
+listed in `unknown` and is 0 in `per_100`: that 0 is a placeholder, not a measured 0, so send `unknown` on with it.
+Nothing is kept. Example:
+
+```json
+{"kind": "per_100", "name": "Multigrain bread", "hint": "toasted"}
+→ {"name": "Multigrain bread", "per_100": {"kcal": 250.0, "protein_g": 9.0, "carbs_g": 41.0, "fat_g": 4.0, "fibre_g": 0.0},
+   "unit": "g", "unknown": ["fibre_g"], "source": "estimate"}
+```
+
+To log it by weight, `log_food` (the `unknown` at the top, or inside `per_100`; both work):
+
+```json
+{"name": "Multigrain bread", "source": "estimate", "meal": "breakfast", "grams": 60, "unit": "g",
+ "per_100": {"kcal": 250.0, "protein_g": 9.0, "carbs_g": 41.0, "fat_g": 4.0, "fibre_g": 0.0}, "unknown": ["fibre_g"]}
+```
+
+To switch a logged entry, `update_food` (the `unknown` inside `per_100` only: a top-level `unknown` is refused there):
+
+```json
+{"entry_id": "a1b2c3d4e5", "grams": 60, "unit": "g", "expected_rev": 2,
+ "per_100": {"kcal": 250.0, "protein_g": 9.0, "carbs_g": 41.0, "fat_g": 4.0, "fibre_g": 0.0, "unknown": ["fibre_g"]}}
+```
 
 `note` (photo and text): what one portion is, with about what it weighs ("1 slice, about 40 g"), so an app can show the
 weight and scale it with the portions.

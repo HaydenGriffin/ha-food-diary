@@ -32,7 +32,7 @@ import voluptuous as vol
 
 from .batches import Batches, recent, regulars
 from .const import DISH_SOURCES, DOMAIN, MACROS, MEALS, NUM, SOURCES
-from .diary import Book, Diary, entry_unknown, num, nums, today, unknown_in, values_of
+from .diary import ENTRY_MAX, Book, Diary, entry_unknown, num, nums, today, unknown_in, values_of
 from .notifications import fire_logged
 from .photos import with_images
 from .sources import read_dishes
@@ -68,7 +68,7 @@ PER_100 = vol.Schema(NUMBERS, extra=vol.REMOVE_EXTRA)
 BATCH_PER_100 = vol.Schema(  # kcal is needed (0 is fine: water)
     {vol.Required(k) if k == "kcal" else vol.Optional(k): AMOUNT for k in NUM}, extra=vol.REMOVE_EXTRA
 )
-SWITCH_PER_100 = vol.Schema(  # update_food's per_100 (kcal needed, 0 is fine) with the macros it doesn't know
+BY_WEIGHT = vol.Schema(  # log_food's and update_food's per_100 (kcal needed, 0 is fine) with the macros it doesn't know
     {**BATCH_PER_100.schema, vol.Optional("unknown"): UNKNOWN}, extra=vol.REMOVE_EXTRA
 )
 GRAMS = AMOUNT
@@ -85,7 +85,7 @@ LOG_SCHEMA = vol.Schema(
         vol.Optional("ref"): cv.string,
         vol.Optional("note"): cv.string,
         vol.Optional("barcode"): cv.string,
-        vol.Optional("per_100"): PER_100,
+        vol.Optional("per_100"): BY_WEIGHT,
         vol.Optional("grams"): GRAMS,
         vol.Optional("unit"): vol.In(("g", "ml")),
         vol.Optional("edited"): cv.boolean,
@@ -108,13 +108,13 @@ UPDATE_SCHEMA = vol.Schema(
         vol.Optional("name"): cv.string,
         vol.Optional("checked"): cv.boolean,
         vol.Optional("unknown"): UNKNOWN,
-        vol.Optional("per_100"): SWITCH_PER_100,  # with grams: the entry by weight from now on
+        vol.Optional("per_100"): BY_WEIGHT,  # with grams: the entry by weight from now on
         vol.Optional("unit"): vol.In(("g", "ml")),
         vol.Optional("edited"): cv.boolean,
         vol.Optional("expected_rev"): EXPECTED_REV,
     }
 )
-ENTRY_NUMBER = vol.All(finite, vol.Range(min=0, max=10_000_000))  # what an entry worked out (per_100 × a big weight)
+ENTRY_NUMBER = vol.All(finite, vol.Range(min=0, max=ENTRY_MAX))  # anything an entry can have (update_food stays under it)
 ENTRY_NUMBERS = {vol.Required(k): ENTRY_NUMBER for k in NUM}
 BEFORE = vol.Schema(  # an entry as update_food's `before` gave it: what restore_food puts back (the rest is dropped)
     {
@@ -124,7 +124,7 @@ BEFORE = vol.Schema(  # an entry as update_food's `before` gave it: what restore
         vol.Required("portions"): vol.All(finite, vol.Range(min=0.01, max=1000)),
         vol.Required("per_portion"): vol.Schema(ENTRY_NUMBERS, extra=vol.REMOVE_EXTRA),
         **ENTRY_NUMBERS,
-        vol.Optional("per_100"): PER_100,
+        vol.Optional("per_100"): vol.Schema(ENTRY_NUMBERS, extra=vol.REMOVE_EXTRA),
         vol.Optional("grams"): GRAMS,
         vol.Optional("unit"): vol.In(("g", "ml")),
         vol.Optional("unknown"): UNKNOWN,
@@ -411,6 +411,8 @@ def async_register_services(hass: HomeAssistant) -> None:
             from_batch(data.diary, f)  # after the client_id check: a retry still answers once the batch is gone
             if not str(f.get("name") or "").strip():
                 raise ServiceValidationError("Give the food's name.")
+            if f.get("per_100") is not None and not num(f.get("grams")):
+                raise ServiceValidationError("per_100 needs grams: how much was eaten.")
             if not num(f.get("kcal")) and not (f.get("per_100") and num(f.get("grams"))):
                 raise ServiceValidationError("Give kcal, or per_100 with grams.")
             if f.get("photo"):  # the meal photo it was estimated from: kept with the entry

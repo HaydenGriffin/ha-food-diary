@@ -141,7 +141,7 @@
         },
         "source": {
           "name": "Source",
-          "description": "Where the numbers came from: photo, label, barcode, text, dish, manual, again, saved or voice."
+          "description": "Where the numbers came from: photo, label, barcode, text, dish, manual, again, saved, voice, import, batch or estimate."
         },
         "ref": {
           "name": "Reference",
@@ -157,11 +157,11 @@
         },
         "per_100": {
           "name": "Per 100 g",
-          "description": "kcal, protein_g, carbs_g, fat_g, fibre_g per 100 g or ml (from a label)."
+          "description": "kcal (needed, 0 for water), protein_g, carbs_g, fat_g, fibre_g per 100 g or ml, and unknown: the macros not known."
         },
         "grams": {
           "name": "Grams",
-          "description": "How much was eaten, with per_100."
+          "description": "How much was eaten, with per_100 (more than 0)."
         },
         "unit": {
           "name": "Unit",

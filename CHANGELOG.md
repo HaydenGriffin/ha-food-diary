@@ -12,6 +12,13 @@
   `edited`, instead of replacing them with `per_100 × grams`.
 - `update_food` answers `before`, the entry as it was; `restore_food` with it and the answer's `rev` as `expected_rev`
   puts it back exactly (a switch to by weight too), refused with `conflict` when the entry changed since.
+- An entry by weight keeps its numbers when its recipe's numbers change (`set_dish_nutrition`) or the planner refreshes
+  a planned meal: those are per portion.
+- `log_food`: `per_100` needs `kcal` (0 is fine: water is logged by its volume, not as a portion with unknown macros) and
+  `grams` above 0; it may carry its own `unknown`, as with `update_food`. A macro listed unknown is stored as 0 in
+  `per_100`. `source` may be `estimate`.
+- An update that would make an entry's numbers bigger than 1,000,000,000 is refused, so every entry `restore_food` is
+  given back restores; own numbers on an entry with 0 g are refused a new weight instead of being dropped.
 
 ## 1.9.1 (25 Oct 2026)
 
