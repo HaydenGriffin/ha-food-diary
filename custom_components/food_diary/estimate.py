@@ -9,6 +9,7 @@
 - ingredients: the raw ingredients of a batch (batches.py), each with its raw numbers per 100 g and how cooking changes its
   weight; "1 onion" becomes grams. Known products (a per_100 given, a barcode in the product book) keep their own numbers.
   Answers are matched to ingredients by number; one left without a weight or calories fails the whole estimate.
+- per_100: one food by its name, its numbers per 100 g (or 100 ml for a drink) as eaten, so an app can log it by weight.
 - a whole recipe: everything its ingredients add up to, for checking the numbers a recipe came with (checks.py).
 
 Every answer is per what was eaten, with per_100 and grams when they are known, and nothing is saved to the diary here.
@@ -20,6 +21,7 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+import math
 from pathlib import Path
 import re
 import time
@@ -129,6 +131,22 @@ INGREDIENTS_STRUCTURE = {
         "selector": {"object": {"fields": INGREDIENT_FIELDS, "multiple": True}},
     },
 }
+# one food's numbers per 100 g (or ml) as eaten, for logging it by weight
+PER_100_STRUCTURE = {
+    **{
+        f"{k}_100": {
+            "description": f"{v} per 100 g (or per 100 ml for a drink), as eaten",
+            "required": True,
+            "selector": NUMBER,
+        }
+        for k, v in LABELS.items()
+    },
+    "unit": {
+        "description": '"ml" for a drink, else "g": what the numbers are per 100 of',
+        "required": True,
+        "selector": {"text": {}},
+    },
+}
 AMOUNT_STRUCTURE = {
     "eaten_g": {"description": "How many g or ml were eaten (0 if it can't be worked out)", "required": True, "selector": NUMBER},
 }
@@ -179,6 +197,12 @@ INGREDIENTS_PROMPT = (
     "to 2.5; meat loses fat and water, about 0.7; onions and vegetables soften, about 0.8; a tin of tomatoes or stock "
     "simmers down, about 0.7; oil and spices about 1).\n"
     "INGREDIENTS:\n{lines}"
+)
+PER_100_PROMPT = (
+    '{who} (one adult{where}) eats "{name}". Give its nutrition PER 100 g as it is eaten: cooked, prepared or served as '
+    "the name says (raw only when it says raw): calories, protein, carbohydrates, fat and fibre in grams (kcal_100, "
+    'protein_g_100, carbs_g_100, fat_g_100, fibre_g_100). For a drink, give them per 100 ml and unit "ml"; otherwise unit '
+    '"g". Food names in other languages are fine.{hint}'
 )
 DISH_NAME_PROMPT = "Estimate the nutrition for ONE normal home-cooked portion{where} of: {name}."
 WHOLE_PROMPT = (
@@ -233,6 +257,32 @@ def with_items(out: dict[str, Any], items: list[dict[str, Any]], complete: bool)
     unknown = [k for k in MACROS if any(k in i.get("unknown", ()) for i in items)]
     sums = {k: round(sum(i[k] for i in items), 1) for k in NUM}
     return {**out, **sums, **({"unknown": unknown} if unknown else {}), "items": items}
+
+
+def real(v: Any, top: float) -> float | None:
+    """A number the AI gave that can be true: finite, 0 to `top`; None otherwise (not given, NaN, negative, too big)."""
+    try:
+        f = float(v) if given(v) else math.nan
+    except OverflowError:  # an integer too big for a float
+        return None
+    return f if math.isfinite(f) and 0 <= f <= top else None
+
+
+def per_100_result(name: str, x: dict[str, Any]) -> dict[str, Any]:
+    """One food's numbers per 100 g or ml from the AI: calories (0 to 900) are needed; a macro it didn't give, or gave
+    as something that can't be true (more than 100 per 100), is unknown (0)."""
+    kcal = real(x.get("kcal_100"), 900)
+    if kcal is None:
+        raise HomeAssistantError(f"I couldn't work out {name} per 100 g. Try again.")
+    macros = {k: real(x.get(f"{k}_100"), 100) for k in MACROS}
+    unknown = [k for k in MACROS if macros[k] is None]
+    return {
+        "name": name,
+        "per_100": {"kcal": round(kcal, 1), **{k: round(v or 0.0, 1) for k, v in macros.items()}},
+        "unit": "ml" if re.match(r"(ml|millilit)", str(x.get("unit") or "").strip().lower()) else "g",
+        **({"unknown": unknown} if unknown else {}),
+        "source": "estimate",
+    }
 
 
 def ingredient_line(n: int, i: dict[str, Any]) -> str:
@@ -512,6 +562,22 @@ class Estimator:
             FIT_STRUCTURE,
         )
         return {**self._meal(x, "text"), **meals_of(x)}
+
+    async def per_100(self, name: str, hint: str = "") -> dict[str, Any]:
+        """One food by its name, per 100 g (or 100 ml for a drink) as eaten, in one AI call."""
+        if not (name := str(name or "").strip()[:80]):
+            raise ServiceValidationError("Give the food's name.")
+        x = await self._ai(
+            "estimate per 100 g",
+            PER_100_PROMPT.format(
+                who=self.who,
+                where=self.where,
+                name=name,
+                hint=f" They say: {str(hint).strip()[:200]}" if str(hint or "").strip() else "",
+            ),
+            PER_100_STRUCTURE,
+        )
+        return per_100_result(name, x)
 
     async def ingredients(self, items: list[dict[str, Any]], name: str = "") -> dict[str, Any]:
         """A batch's raw ingredients worked out in one AI call: {"items": [{name, grams, per_100, cooked_factor, unknown?}]}.

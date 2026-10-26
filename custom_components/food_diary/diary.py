@@ -47,6 +47,8 @@ from .const import DEFAULT_GOALS, DOMAIN, MACROS, MEALS, NUM
 PLANNED = ("breakfast", "lunch", "dinner")  # the meals a plan has (sources.PLANNED_MEALS)
 STORE_VERSION = 1  # rev, client_id and the client_id ledger are additions older versions load (and ignore) as they are
 KEPT = ("estimate", "portions", "dismissed")  # a dish's book entry: kept through new numbers (see checks.py)
+# what update can change on an entry (besides its rev, and plan_key / plan_was, which follow its meal): put_back's fields
+UNDONE = ("name", "meal", "portions", "per_portion", *NUM, "per_100", "grams", "unit", "unknown", "edited", "checked")
 NOT_COPIED = ("id", "at", "rev", "client_id", "plan_key", "plan_was", "edited")  # a copied entry is a new entry
 _LOGGER = logging.getLogger(__name__)
 
@@ -587,11 +589,10 @@ class Diary:
                 continue
             self._check_rev(e, expected_rev)
             unknown = entry_unknown(e)
-            if num(f.get("grams")) and e.get("per_100"):
-                e["grams"] = round(num(f["grams"]), 1)
-                e["per_portion"] = {k: round(num(e["per_100"].get(k)) * e["grams"] / 100, 2) for k in NUM}
-                e["portions"] = 1.0
-                e.pop("edited", None)
+            if isinstance(f.get("per_100"), dict) and num(f.get("grams")):
+                unknown = self._by_weight(e, f)
+            elif num(f.get("grams")) and e.get("per_100"):
+                self._regram(e, num(f["grams"]))
             if num(f.get("portions")):
                 e["portions"] = num(f["portions"])
             said = [k for k in MACROS if k in (f.get("unknown") or ())]  # put back to unknown (Undo after a fix): 0
@@ -617,6 +618,59 @@ class Diary:
             self.async_changed()
             return e
         return None
+
+    @staticmethod
+    def _by_weight(e: dict[str, Any], f: dict[str, Any]) -> list[str]:
+        """The entry from now on by weight: `per_100` (in `unit`) × `grams`, one portion; edited only when the request says
+        so (numbers per 100 worked out from the person's own). Returns its unknown macros: the ones `per_100` leaves out or
+        lists in its `unknown`."""
+        grams, unknown = round(num(f["grams"]), 1), unknown_in(f["per_100"])
+        per_100 = {k: 0.0 if k in unknown else v for k, v in nums(f["per_100"]).items()}  # an unknown is stored as 0
+        e.update(
+            per_100=per_100,
+            unit="ml" if f.get("unit") == "ml" else "g",
+            grams=grams,
+            portions=1.0,
+            per_portion={k: round(per_100[k] * grams / 100, 2) for k in NUM},
+        )
+        if f.get("edited"):
+            e["edited"] = True
+        else:
+            e.pop("edited", None)
+        return unknown
+
+    @staticmethod
+    def _regram(e: dict[str, Any], grams: float) -> None:
+        """A new amount for an entry by weight: its per_100 × grams, except numbers of the person's own (`edited`), which
+        are for the amount it had and scale with it (and stay hers). One portion either way."""
+        was = num(e.get("grams")) * (num(e.get("portions")) or 1.0)  # what the entry's numbers are for now
+        grams = round(grams, 1)
+        if e.get("edited") and was > 0:
+            p = num(e.get("portions")) or 1.0
+            e["per_portion"] = {k: round(num(e["per_portion"].get(k)) * p * grams / was, 2) for k in NUM}
+        else:
+            e["per_portion"] = {k: round(num(e["per_100"].get(k)) * grams / 100, 2) for k in NUM}
+            e.pop("edited", None)
+        e.update(grams=grams, portions=1.0)
+
+    def put_back(self, d: str, entry_id: str, before: dict[str, Any], expected_rev: int) -> dict[str, Any] | None:
+        """Undo of an update: what an update can change (UNDONE) exactly as `before` has it (one it doesn't have is
+        removed), with a new revision. The rest of the entry (its id, time, source, ref, photo, client_id…) an update
+        never changes, so with `expected_rev` the revision the update made, the entry is then exactly `before`. A plan
+        that follows the diary is told as for an update (a meal or name put back)."""
+        if (e := self.find(d, entry_id)) is None:
+            return None
+        self._check_rev(e, expected_rev)
+        was_name, was_meal = e["name"], e["meal"]
+        for k in UNDONE:
+            if k in before and before[k] is not False:
+                e[k] = copy.deepcopy(before[k])
+            else:
+                e.pop(k, None)
+        self._changed_entry(e)
+        self._follow_edit(d, e, was_name, was_meal)
+        self.async_changed()
+        return e
 
     def _follow_edit(self, d: str, e: dict[str, Any], was_name: str, was_meal: str) -> None:
         """A planned entry renamed or moved: a following plan takes the new name, or the meal moves on the plan too (to a

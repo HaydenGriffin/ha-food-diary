@@ -195,7 +195,7 @@
     },
     "update_food": {
       "name": "Change food",
-      "description": "Change an entry: portions, grams (label and barcode entries), meal, name, your own numbers for the whole entry, or mark it as checked.",
+      "description": "Change an entry: portions, grams, meal, name, your own numbers for the whole entry, switch it to by weight (per_100 with grams), or mark it as checked.",
       "fields": {
         "person": {
           "name": "Person",
@@ -215,7 +215,7 @@
         },
         "grams": {
           "name": "Grams",
-          "description": "New amount, for entries with per-100 values."
+          "description": "New amount, for entries with per-100 values (or with per_100, to switch to by weight)."
         },
         "meal": {
           "name": "Meal",
@@ -253,9 +253,47 @@
           "name": "Unknown",
           "description": "Macros to mark as not known again (protein_g, carbs_g, fat_g, fibre_g), stored as 0: Undo after a fix that gave them. Wins over a number sent for the same macro."
         },
+        "per_100": {
+          "name": "Per 100",
+          "description": "With grams: the entry by weight from now on, its numbers per 100 g or ml (kcal needed; unknown lists macros not known). Keeps its name, meal, photo and source."
+        },
+        "unit": {
+          "name": "Unit",
+          "description": "g or ml: what per_100 is per (with per_100)."
+        },
+        "edited": {
+          "name": "Your own numbers",
+          "description": "With per_100: true when it was worked out from your own corrected numbers."
+        },
         "expected_rev": {
           "name": "Expected revision",
           "description": "The entry's rev as you last saw it. If the entry has changed since, nothing changes and the action fails with a conflict."
+        }
+      }
+    },
+    "restore_food": {
+      "name": "Undo a change to food",
+      "description": "Puts an entry back exactly as update_food's before gave it (with a new revision). Fails with a conflict if it changed since.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "entry_id": {
+          "name": "Entry",
+          "description": "The entry's id."
+        },
+        "date": {
+          "name": "Date",
+          "description": "The entry's day. Leave out for today."
+        },
+        "entry": {
+          "name": "Entry as it was",
+          "description": "before, from update_food's answer."
+        },
+        "expected_rev": {
+          "name": "Expected revision",
+          "description": "The rev update_food's answer gave the entry. If it has changed since, nothing changes and the action fails with a conflict."
         }
       }
     },
@@ -359,7 +397,7 @@
     },
     "estimate": {
       "name": "Estimate",
-      "description": "Work out what something is and its nutrition, without logging it: a meal photo, a label photo and amount, a barcode and amount, words, a recipe, or a batch's raw ingredients.",
+      "description": "Work out what something is and its nutrition, without logging it: a meal photo, a label photo and amount, a barcode and amount, words, a recipe, a batch's raw ingredients, or one food per 100 g.",
       "fields": {
         "person": {
           "name": "Person",
@@ -367,7 +405,7 @@
         },
         "kind": {
           "name": "Kind",
-          "description": "photo, label, barcode, text, dish or ingredients."
+          "description": "photo, label, barcode, text, dish, ingredients or per_100."
         },
         "image": {
           "name": "Photo",
@@ -379,7 +417,7 @@
         },
         "hint": {
           "name": "Hint",
-          "description": "Anything to help with a meal photo."
+          "description": "Anything to help with a meal photo, or with a food's name (per_100)."
         },
         "text": {
           "name": "Text",
@@ -416,6 +454,10 @@
         "items": {
           "name": "Ingredients to work out",
           "description": "A batch's raw ingredients (ingredients), at most 30: each a name with grams, or an amount like 1 onion."
+        },
+        "name": {
+          "name": "Food",
+          "description": "The food's name (per_100): its numbers per 100 g, or 100 ml for a drink, as eaten."
         }
       }
     },

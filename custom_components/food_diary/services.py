@@ -9,12 +9,16 @@ A macro left out of log_food (or listed in its `unknown`, as an estimate, a save
 unknown, not 0: the entry keeps it in `unknown`, and get_day / get_history / get_week_review count it in `incomplete`.
 update_food giving a macro makes it known; listing it in update_food's `unknown` makes it unknown again (Undo).
 
+update_food with `per_100` and `grams` switches an entry to by weight; its answer has the entry as it was (`before`), and
+restore_food puts that back exactly (Undo).
+
 log_food with source "batch" and ref a batch id (batches.py) takes the batch's name and cooked per_100 when they aren't
 given: grams is then all a bowl of it needs."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import copy
 from datetime import date, timedelta
 import math
 from typing import TYPE_CHECKING, Any
@@ -64,7 +68,11 @@ PER_100 = vol.Schema(NUMBERS, extra=vol.REMOVE_EXTRA)
 BATCH_PER_100 = vol.Schema(  # kcal is needed (0 is fine: water)
     {vol.Required(k) if k == "kcal" else vol.Optional(k): AMOUNT for k in NUM}, extra=vol.REMOVE_EXTRA
 )
+SWITCH_PER_100 = vol.Schema(  # update_food's per_100 (kcal needed, 0 is fine) with the macros it doesn't know
+    {**BATCH_PER_100.schema, vol.Optional("unknown"): UNKNOWN}, extra=vol.REMOVE_EXTRA
+)
 GRAMS = AMOUNT
+PLAN_KEY = vol.All(cv.string, vol.Match(r"^\d{4}-\d{2}-\d{2}\|(breakfast|lunch|dinner)(\|side:\d{1,2})?$"))
 LOG_SCHEMA = vol.Schema(
     {
         **BASE,
@@ -85,9 +93,7 @@ LOG_SCHEMA = vol.Schema(
         vol.Optional("image_url"): cv.string,
         vol.Optional("client_id"): CLIENT_ID,
         vol.Optional("unknown"): UNKNOWN,
-        vol.Optional("plan_key"): vol.All(
-            cv.string, vol.Match(r"^\d{4}-\d{2}-\d{2}\|(breakfast|lunch|dinner)(\|side:\d{1,2})?$")
-        ),
+        vol.Optional("plan_key"): PLAN_KEY,
     }
 )
 UPDATE_SCHEMA = vol.Schema(
@@ -102,7 +108,38 @@ UPDATE_SCHEMA = vol.Schema(
         vol.Optional("name"): cv.string,
         vol.Optional("checked"): cv.boolean,
         vol.Optional("unknown"): UNKNOWN,
+        vol.Optional("per_100"): SWITCH_PER_100,  # with grams: the entry by weight from now on
+        vol.Optional("unit"): vol.In(("g", "ml")),
+        vol.Optional("edited"): cv.boolean,
         vol.Optional("expected_rev"): EXPECTED_REV,
+    }
+)
+ENTRY_NUMBER = vol.All(finite, vol.Range(min=0, max=10_000_000))  # what an entry worked out (per_100 × a big weight)
+ENTRY_NUMBERS = {vol.Required(k): ENTRY_NUMBER for k in NUM}
+BEFORE = vol.Schema(  # an entry as update_food's `before` gave it: what restore_food puts back (the rest is dropped)
+    {
+        vol.Optional("id"): cv.string,
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=80)),
+        vol.Required("meal"): vol.In(MEALS),
+        vol.Required("portions"): vol.All(finite, vol.Range(min=0.01, max=1000)),
+        vol.Required("per_portion"): vol.Schema(ENTRY_NUMBERS, extra=vol.REMOVE_EXTRA),
+        **ENTRY_NUMBERS,
+        vol.Optional("per_100"): PER_100,
+        vol.Optional("grams"): GRAMS,
+        vol.Optional("unit"): vol.In(("g", "ml")),
+        vol.Optional("unknown"): UNKNOWN,
+        vol.Optional("edited"): cv.boolean,
+        vol.Optional("checked"): cv.boolean,
+    },
+    extra=vol.REMOVE_EXTRA,
+)
+RESTORE_FOOD_SCHEMA = vol.Schema(
+    {
+        **BASE,
+        vol.Required("entry_id"): cv.string,
+        DATE: cv.date,
+        vol.Required("entry"): BEFORE,
+        vol.Required("expected_rev"): EXPECTED_REV,
     }
 )
 ENTRY_SCHEMA = vol.Schema(
@@ -156,7 +193,8 @@ GET_BATCHES_SCHEMA = vol.Schema({**BASE, vol.Optional("days", default=5): vol.Al
 ESTIMATE_SCHEMA = vol.Schema(
     {
         **BASE,
-        vol.Required("kind"): vol.In(("photo", "label", "barcode", "text", "dish", "ingredients")),
+        vol.Required("kind"): vol.In(("photo", "label", "barcode", "text", "dish", "ingredients", "per_100")),
+        vol.Optional("name", default=""): vol.All(cv.string, vol.Length(max=120)),
         vol.Optional("image"): cv.string,
         vol.Optional("amount", default=""): cv.string,
         vol.Optional("hint", default=""): cv.string,
@@ -305,6 +343,22 @@ def from_batch(diary: Diary, f: dict[str, Any]) -> None:
         f["unknown"] = [k for k in MACROS if k in (*b.get("unknown", ()), *f.get("unknown", ()))]
 
 
+def check_switch(f: dict[str, Any]) -> None:
+    """update_food's switch to by weight: `per_100` (with `unit`, `edited`) only together with `grams`, and alone: it sets
+    the whole amount and the numbers."""
+    if "per_100" not in f:
+        if "unit" in f or "edited" in f:
+            raise ServiceValidationError("unit and edited go with per_100 and grams.")
+        return
+    if "grams" not in f:
+        raise ServiceValidationError("per_100 needs grams: how much was eaten.")
+    if both := [k for k in (*NUM, "portions", "unknown") if k in f]:
+        raise ServiceValidationError(
+            f"per_100 and grams set the amount and the numbers: don't send {', '.join(both)} with them "
+            "(per_100 has its own unknown)."
+        )
+
+
 def logged(diary: Diary, record: dict[str, Any], repeat: bool) -> dict[str, Any]:
     """log_food's answer, for a new entry or a repeated client_id: the entry as it is now (None once it's deleted)."""
     d = record["date"]
@@ -371,8 +425,22 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def update_food(call: ServiceCall) -> ServiceResponse:
         data = resolve(hass, call)
         changes = {k: v for k, v in call.data.items() if k not in (ATTR_PERSON, "entry_id", "date", "expected_rev")}
-        e = data.diary.update(day_of(call), call.data["entry_id"], changes, call.data.get("expected_rev"))
-        if e is None:
+        check_switch(changes)
+        d, entry_id = day_of(call), call.data["entry_id"]
+        before = copy.deepcopy(data.diary.find(d, entry_id))
+        if (e := data.diary.update(d, entry_id, changes, call.data.get("expected_rev"))) is None:
+            raise ServiceValidationError(NOT_IN_DIARY)
+        return {"entry": e, "before": before}
+
+    async def restore_food(call: ServiceCall) -> ServiceResponse:
+        """Undo of an update_food: the entry as its `before` was, refused (conflict) when it changed since that update."""
+        before, entry_id = call.data["entry"], call.data["entry_id"]
+        if before.get("id", entry_id) != entry_id:
+            raise ServiceValidationError("That entry is another one: give the entry update_food answered for it.")
+        if ("per_100" in before) != ("grams" in before):
+            raise ServiceValidationError("An entry by weight has per_100 and grams together.")
+        diary = resolve(hass, call).diary
+        if (e := diary.put_back(day_of(call), entry_id, before, call.data["expected_rev"])) is None:
             raise ServiceValidationError(NOT_IN_DIARY)
         return {"entry": e}
 
@@ -524,6 +592,8 @@ def async_register_services(hass: HomeAssistant) -> None:
             return await est.text(c["text"])
         if kind == "ingredients":
             return await est.ingredients(c["items"], c["dish_name"])
+        if kind == "per_100":
+            return await est.per_100(c["name"], c["hint"])
         if not c.get("dish_id"):
             raise ServiceValidationError("Add dish_id.")
         return await est.dish(c["dish_id"], c["dish_name"], c["ingredients"], c["servings"], c["amounts_per"], c["fresh"])
@@ -610,6 +680,7 @@ def async_register_services(hass: HomeAssistant) -> None:
     handlers: list[tuple[str, Callable[[ServiceCall], Awaitable[ServiceResponse]], vol.Schema, SupportsResponse]] = [
         ("log_food", log_food, LOG_SCHEMA, SupportsResponse.OPTIONAL),
         ("update_food", update_food, UPDATE_SCHEMA, SupportsResponse.OPTIONAL),
+        ("restore_food", restore_food, RESTORE_FOOD_SCHEMA, SupportsResponse.OPTIONAL),
         ("delete_food", delete_food, ENTRY_SCHEMA, SupportsResponse.OPTIONAL),
         ("get_day", get_day, DAY_SCHEMA, SupportsResponse.ONLY),
         ("get_history", get_history, HISTORY_SCHEMA, SupportsResponse.ONLY),

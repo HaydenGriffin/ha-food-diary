@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.10.0 (26 Oct 2026)
+
+- `estimate` kind `per_100` with `name` (and `hint`): one food's numbers per 100 g as it is eaten, or per 100 ml for a
+  drink, in one AI call: `{name, per_100, unit, unknown?, source: "estimate"}`. Calories must be real (0 to 900); a macro
+  left out or impossible is unknown.
+- `update_food` takes `per_100` (with its own `unknown`), `unit` and `edited` together with `grams`: the entry is by
+  weight from then on (`per_100 × grams`, one portion), keeping its name, meal, source, ref, photo and `client_id`.
+  `per_100` without `grams`, or with portions, numbers or `unknown`, is refused.
+- A new `grams` on an entry with numbers of the person's own (`edited`) scales them with the weight and keeps them
+  `edited`, instead of replacing them with `per_100 × grams`.
+- `update_food` answers `before`, the entry as it was; `restore_food` with it and the answer's `rev` as `expected_rev`
+  puts it back exactly (a switch to by weight too), refused with `conflict` when the entry changed since.
+
 ## 1.9.1 (25 Oct 2026)
 
 - `estimate` kind `ingredients` matches the AI's answer to each ingredient by its number (by name only when that name is

@@ -223,7 +223,44 @@ update_food:
             - carbs_g
             - fat_g
             - fibre_g
+    per_100:
+      example: '{"kcal": 250, "protein_g": 9, "carbs_g": 41, "fat_g": 4, "fibre_g": 7}'
+      selector:
+        object: {}
+    unit:
+      selector:
+        select:
+          options:
+          - g
+          - ml
+    edited:
+      selector:
+        boolean: {}
     expected_rev:
+      selector:
+        number:
+          min: 1
+          max: 1000000
+          mode: box
+restore_food:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    entry_id:
+      required: true
+      selector:
+        text: {}
+    date:
+      selector:
+        date: {}
+    entry:
+      required: true
+      selector:
+        object: {}
+    expected_rev:
+      required: true
       selector:
         number:
           min: 1
@@ -348,6 +385,7 @@ estimate:
           - text
           - dish
           - ingredients
+          - per_100
     image:
       selector:
         text: {}
@@ -393,6 +431,9 @@ estimate:
       example: '[{"name": "Spaghetti", "grams": 500}, {"name": "Onion", "amount": "1 onion"}]'
       selector:
         object: {}
+    name:
+      selector:
+        text: {}
 get_dish_nutrition:
   fields:
     dish_id:

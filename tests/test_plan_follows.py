@@ -217,3 +217,23 @@ async def test_planned_food_logged_without_its_plan_key_is_just_food(hass: HomeA
     await call(hass, "log_food", {"name": "Soup", "kcal": 300, "meal": "lunch", "date": day(2), "source": "plan"})
     (soup,) = (await entries(hass, day(2)))["lunch"]
     assert soup["source"] == "again" and "plan_key" not in soup and kitchen.told == []
+
+
+async def test_restore_food_puts_a_move_or_a_rename_back_on_the_plan(hass: HomeAssistant, setup, kitchen):
+    """Undo of an update_food (1.10.0) is told to the plan like an update: off to a snack and back, a name and back."""
+    e = await planned(hass, "dinner")
+    for change, told in (
+        ({"meal": "snack"}, {"action": "restored", "date": day(1), "meal": "dinner", "name": "Chilli con carne"}),
+        (
+            {"name": "Chilli with rice"},
+            {"action": "renamed", "date": day(1), "meal": "dinner", "name": "Chilli con carne", "previous": "Chilli with rice"},
+        ),
+    ):
+        out = await call(hass, "update_food", {"entry_id": e["id"], "date": day(1), **change})
+        rev = out["entry"]["rev"]
+        back = await call(
+            hass, "restore_food", {"entry_id": e["id"], "date": day(1), "entry": out["before"], "expected_rev": rev}
+        )
+        assert kitchen.told[-1] == told
+        assert back["entry"] == {**out["before"], "rev": rev + 1}
+    assert kitchen.slot(day(1), "dinner") == "Chilli con carne"
