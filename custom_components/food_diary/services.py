@@ -13,7 +13,12 @@ update_food with `per_100` and `grams` switches an entry to by weight; its answe
 restore_food puts that back exactly (Undo).
 
 log_food with source "batch" and ref a batch id (batches.py) takes the batch's name and cooked per_100 when they aren't
-given: grams is then all a bowl of it needs."""
+given: grams is then all a bowl of it needs.
+
+Veg (`veg_g`, grams of vegetables and pulses) goes with the other numbers wherever they're taken: log_food (per portion,
+or in per_100), update_food (for the whole entry), save_meal's foods, a batch ingredient's per_100. Left out, it's unknown.
+
+set_fullness and get_fullness keep how full the person was after a meal (fullness.py)."""
 
 from __future__ import annotations
 
@@ -31,8 +36,9 @@ from homeassistant.helpers.service import async_register_admin_service
 import voluptuous as vol
 
 from .batches import Batches, recent, regulars
-from .const import DISH_SOURCES, DOMAIN, MACROS, MEALS, NUM, SOURCES
+from .const import DISH_SOURCES, DOMAIN, MACROS, MEALS, NUM, SOURCES, VEG
 from .diary import ENTRY_MAX, Book, Diary, entry_unknown, num, nums, today, unknown_in, values_of
+from .fullness import ANSWERS, ASKED, Fullness
 from .notifications import fire_logged
 from .photos import with_images
 from .sources import read_dishes
@@ -56,6 +62,7 @@ def finite(v: Any) -> float:
 
 AMOUNT = vol.All(finite, vol.Range(min=0, max=20000))  # a nutrition number or a weight
 NUMBERS = {vol.Optional(k): AMOUNT for k in NUM}
+WITH_VEG = {**NUMBERS, vol.Optional(VEG): AMOUNT}  # the five numbers and veg, which isn't a goal
 BASE = {vol.Optional(ATTR_PERSON): cv.entity_id}
 DATE = vol.Optional("date")
 PORTIONS = vol.All(finite, vol.Range(min=0.05, max=50))
@@ -64,9 +71,10 @@ CLIENT_ID = vol.All(cv.string, vol.Match(r"^[A-Za-z0-9_-]{8,64}$"))  # made by t
 EXPECTED_REV = vol.All(vol.Coerce(int), vol.Range(min=1))
 UNKNOWN = vol.All(cv.ensure_list, [vol.In(MACROS)])  # macros not known (sent back as an estimate or a saved meal gave them)
 
-PER_100 = vol.Schema(NUMBERS, extra=vol.REMOVE_EXTRA)
+PER_100 = vol.Schema(WITH_VEG, extra=vol.REMOVE_EXTRA)
 BATCH_PER_100 = vol.Schema(  # kcal is needed (0 is fine: water)
-    {vol.Required(k) if k == "kcal" else vol.Optional(k): AMOUNT for k in NUM}, extra=vol.REMOVE_EXTRA
+    {**{vol.Required(k) if k == "kcal" else vol.Optional(k): AMOUNT for k in NUM}, vol.Optional(VEG): AMOUNT},
+    extra=vol.REMOVE_EXTRA,
 )
 BY_WEIGHT = vol.Schema(  # log_food's and update_food's per_100 (kcal needed, 0 is fine) with the macros it doesn't know
     {**BATCH_PER_100.schema, vol.Optional("unknown"): UNKNOWN}, extra=vol.REMOVE_EXTRA
@@ -77,7 +85,7 @@ LOG_SCHEMA = vol.Schema(
     {
         **BASE,
         vol.Optional("name"): cv.string,  # required, except for a batch (its name)
-        **NUMBERS,
+        **WITH_VEG,
         vol.Optional("portions", default=1): PORTIONS,
         vol.Optional("meal"): vol.In(MEALS),
         DATE: cv.date,
@@ -101,7 +109,7 @@ UPDATE_SCHEMA = vol.Schema(
         **BASE,
         vol.Required("entry_id"): cv.string,
         DATE: cv.date,
-        **NUMBERS,
+        **WITH_VEG,
         vol.Optional("portions"): PORTIONS,
         vol.Optional("grams"): vol.All(finite, vol.Range(min=0.1, max=20000)),
         vol.Optional("meal"): vol.In(MEALS),
@@ -115,7 +123,7 @@ UPDATE_SCHEMA = vol.Schema(
     }
 )
 ENTRY_NUMBER = vol.All(finite, vol.Range(min=0, max=ENTRY_MAX))  # anything an entry can have (update_food stays under it)
-ENTRY_NUMBERS = {vol.Required(k): ENTRY_NUMBER for k in NUM}
+ENTRY_NUMBERS = {**{vol.Required(k): ENTRY_NUMBER for k in NUM}, vol.Optional(VEG): ENTRY_NUMBER}
 BEFORE = vol.Schema(  # an entry as update_food's `before` gave it: what restore_food puts back (the rest is dropped)
     {
         vol.Optional("id"): cv.string,
@@ -190,10 +198,14 @@ UPDATE_BATCH_SCHEMA = vol.Schema(
 )
 BATCH_SCHEMA = vol.Schema({**BASE, vol.Required("batch_id"): cv.string})
 GET_BATCHES_SCHEMA = vol.Schema({**BASE, vol.Optional("days", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=400))})
+PLATE = vol.Schema(  # what a meal photo is on, so the AI sizes the portions against it
+    {vol.Required("kind"): vol.In(("plate", "bowl")), vol.Optional("cm"): vol.All(finite, vol.Range(min=10, max=40))}
+)
+MEDIA = vol.All(cv.ensure_list, vol.Length(min=1, max=4), [cv.string])  # a menu's photos, base64
 ESTIMATE_SCHEMA = vol.Schema(
     {
         **BASE,
-        vol.Required("kind"): vol.In(("photo", "label", "barcode", "text", "dish", "ingredients", "per_100")),
+        vol.Required("kind"): vol.In(("photo", "label", "barcode", "text", "dish", "ingredients", "per_100", "menu")),
         vol.Optional("name", default=""): vol.All(cv.string, vol.Length(max=120)),
         vol.Optional("image"): cv.string,
         vol.Optional("amount", default=""): cv.string,
@@ -207,6 +219,8 @@ ESTIMATE_SCHEMA = vol.Schema(
         vol.Optional("amounts_per", default="recipe"): vol.In(("recipe", "portion")),
         vol.Optional("fresh", default=False): cv.boolean,
         vol.Optional("items", default=[]): vol.All(cv.ensure_list, vol.Length(max=30), [ESTIMATE_ITEM]),
+        vol.Optional("plate"): PLATE,
+        vol.Optional("media"): MEDIA,
     }
 )
 PHOTO_SCHEMA = vol.Schema(
@@ -231,7 +245,7 @@ COPY_SCHEMA = vol.Schema(
 UNCOPY_SCHEMA = vol.Schema({**BASE, vol.Required("token"): cv.string})
 MAX_FOODS = 50
 SAVED_FOOD = vol.Schema(  # one food of save_meal's `foods`, as log_food takes it (only these are kept)
-    {vol.Required("name"): cv.string, **NUMBERS, vol.Optional("unknown"): UNKNOWN}, extra=vol.REMOVE_EXTRA
+    {vol.Required("name"): cv.string, **WITH_VEG, vol.Optional("unknown"): UNKNOWN}, extra=vol.REMOVE_EXTRA
 )
 SAVE_MEAL_SCHEMA = vol.Schema(
     {
@@ -248,8 +262,18 @@ UPDATE_SAVED_SCHEMA = vol.Schema(
 )
 RECENT_SCHEMA = vol.Schema({**BASE, vol.Optional("limit", default=30): vol.All(vol.Coerce(int), vol.Range(min=1, max=200))})
 REVIEW_SCHEMA = vol.Schema(
-    {**BASE, DATE: cv.date, vol.Optional("days", default=7): vol.All(vol.Coerce(int), vol.Range(min=1, max=31))}
+    {**BASE, DATE: cv.date, vol.Optional("days", default=7): vol.All(vol.Coerce(int), vol.Range(min=1, max=35))}
 )
+SET_FULLNESS_SCHEMA = vol.Schema(
+    {
+        **BASE,
+        DATE: cv.date,
+        vol.Required("meal"): vol.In(ASKED),
+        vol.Required("fullness"): vol.Any(None, vol.In(ANSWERS)),  # None takes the answer back
+        vol.Optional("client_id"): CLIENT_ID,
+    }
+)
+GET_FULLNESS_SCHEMA = vol.Schema({**BASE, vol.Optional("days", default=60): vol.All(vol.Coerce(int), vol.Range(min=1, max=400))})
 DISH_SCHEMA = vol.Schema({vol.Required("dish_id"): cv.string})
 DISH_SET_SCHEMA = vol.Schema(
     {
@@ -352,10 +376,10 @@ def check_switch(f: dict[str, Any]) -> None:
         return
     if "grams" not in f:
         raise ServiceValidationError("per_100 needs grams: how much was eaten.")
-    if both := [k for k in (*NUM, "portions", "unknown") if k in f]:
+    if both := [k for k in (*NUM, VEG, "portions", "unknown") if k in f]:
         raise ServiceValidationError(
             f"per_100 and grams set the amount and the numbers: don't send {', '.join(both)} with them "
-            "(per_100 has its own unknown)."
+            "(per_100 has its own unknown and veg_g)."
         )
 
 
@@ -542,6 +566,22 @@ def async_register_services(hass: HomeAssistant) -> None:
         end = d.isoformat() if d else (date.fromisoformat(today()) - timedelta(days=1)).isoformat()
         return resolve(hass, call).diary.review(end, call.data["days"])
 
+    async def set_fullness(call: ServiceCall) -> ServiceResponse:
+        """How full the person was after a meal (None takes it back). With a client_id it is set once: a retry, or one
+        sent again late, changes nothing and answers what is there now."""
+        diary = resolve(hass, call).diary
+        d, meal = day_of(call), call.data["meal"]
+
+        async def create() -> dict[str, Any]:
+            Fullness(diary).set(d, meal, call.data["fullness"])
+            return {"fullness": {"date": d, "meal": meal}}
+
+        _, repeat = await diary.create_once(call.data.get("client_id"), dict(call.data), create)
+        return {"date": d, "meal": meal, "fullness": Fullness(diary).get(d, meal), **repeat_flags(repeat, False)}
+
+    async def get_fullness(call: ServiceCall) -> ServiceResponse:
+        return {"answers": Fullness(resolve(hass, call).diary).answers(call.data["days"])}
+
     async def get_dishes(call: ServiceCall) -> ServiceResponse:
         """The dish library with one portion's numbers where the recipe book knows them (empty without a library)."""
         data = resolve(hass, call)
@@ -585,7 +625,9 @@ def async_register_services(hass: HomeAssistant) -> None:
         if kind in ("photo", "label") and not c.get("image"):
             raise ServiceValidationError("Add the photo (image, base64).")
         if kind == "photo":
-            return await est.photo(c["image"], c["hint"])
+            return await est.photo(c["image"], c["hint"], c.get("plate"))
+        if kind == "menu":
+            return await est.menu(c.get("media") or ([c["image"]] if c.get("image") else []), c["hint"])
         if kind == "label":
             return await est.label(c["image"], c["amount"], c["barcode"])
         if kind == "barcode":
@@ -596,8 +638,8 @@ def async_register_services(hass: HomeAssistant) -> None:
             return await est.ingredients(c["items"], c["dish_name"])
         if kind == "per_100":
             return await est.per_100(c["name"], c["hint"])
-        if not c.get("dish_id"):
-            raise ServiceValidationError("Add dish_id.")
+        if not c.get("dish_id"):  # a dish by its name, eaten out
+            return await est.eating_out(c["name"] or c["dish_name"], c["hint"])
         return await est.dish(c["dish_id"], c["dish_name"], c["ingredients"], c["servings"], c["amounts_per"], c["fresh"])
 
     async def get_dish_nutrition(call: ServiceCall) -> ServiceResponse:
@@ -699,6 +741,8 @@ def async_register_services(hass: HomeAssistant) -> None:
         ("delete_batch", delete_batch, BATCH_SCHEMA, SupportsResponse.OPTIONAL),
         ("get_batches", get_batches, GET_BATCHES_SCHEMA, SupportsResponse.ONLY),
         ("get_week_review", get_week_review, REVIEW_SCHEMA, SupportsResponse.ONLY),
+        ("set_fullness", set_fullness, SET_FULLNESS_SCHEMA, SupportsResponse.OPTIONAL),
+        ("get_fullness", get_fullness, GET_FULLNESS_SCHEMA, SupportsResponse.ONLY),
         ("get_dishes", get_dishes, vol.Schema(BASE), SupportsResponse.ONLY),
         ("sync_plan", sync_plan, vol.Schema(BASE), SupportsResponse.OPTIONAL),
         ("estimate", estimate, ESTIMATE_SCHEMA, SupportsResponse.ONLY),

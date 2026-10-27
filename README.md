@@ -20,7 +20,7 @@ and no data of its own.
 
 | Path | What it is |
 | --- | --- |
-| [`custom_components/food_diary`](custom_components/food_diary) | The Home Assistant integration: the diary, goals, sensors, 24 services, a webhook and voice intents. Installable through HACS. |
+| [`custom_components/food_diary`](custom_components/food_diary) | The Home Assistant integration: the diary, goals, sensors, 31 services, a webhook and voice intents. Installable through HACS. |
 | [`ios/`](ios) | **Food**, the SwiftUI iPhone app, with widgets, Control Center controls, a share extension and two-way Apple Health sync. |
 | [`custom_sentences/`](custom_sentences) | Optional Assist sentences: "log two eggs on toast for breakfast", "how many calories have I got left?" |
 | [`docs/integration.md`](docs/integration.md) | The full reference: options, entities, every service with its fields and responses, and the sensor contracts, and the interface for another integration to provide recipes and a meal plan. |
@@ -51,6 +51,9 @@ The full feature list, build steps and signing notes are in [`ios/README.md`](io
   or moving a planned meal changes the plan too. A background check flags recipe numbers that look wrong.
 - **Unknown is not zero.** A macro nobody gave is marked unknown rather than stored as a real 0, and a day says which
   totals are incomplete.
+- **Eating out and veg.** A photo of a restaurant's menu becomes its dishes with their numbers, a meal photo can say how
+  big the plate is, and every estimate says how much veg (vegetables and pulses) is in it. How full you were after a
+  meal is kept too, so you can see what keeps you full.
 - **Works without signal.** Foods with known numbers queue on the phone and go in when Home Assistant is reachable.
 - **Retries are safe, newer edits win.** Logging takes an optional `client_id`, so a double tap or a resent request makes
   one entry; entries carry a revision, and background AI work never overwrites a change made while it was thinking

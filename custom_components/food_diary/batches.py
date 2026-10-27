@@ -8,6 +8,8 @@ and ref the batch id.
 
 Batches are kept in each person's diary for KEEP_DAYS (older ones go when the diary loads, on get_batches and on a
 save); the same name on the same day is the same batch (it replaces). A pot needs at least MIN_RAW_G of ingredients.
+
+A batch knows its veg (`veg_g` in its totals and per_100) when every ingredient's per_100 does.
 """
 
 from __future__ import annotations
@@ -19,8 +21,8 @@ import uuid
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 
-from .const import MACROS, NUM
-from .diary import Diary, given, num, nums, today, unknown_in
+from .const import MACROS, NUM, VEG
+from .diary import Diary, given, num, nums, today, unknown_in, veg_of, with_veg
 
 KEEP_DAYS = 400
 MIN_RAW_G = 1
@@ -40,7 +42,7 @@ def ingredient(f: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": str(f.get("name") or "Something").strip()[:80],
         "grams": round(num(f.get("grams")), 1),
-        "per_100": nums(raw),
+        "per_100": with_veg(nums(raw), veg_of(raw)),
         "cooked_factor": cooked_factor(f.get("cooked_factor")),
         **({"ref": str(f["ref"])[:80]} if f.get("ref") else {}),
         **({"unknown": u} if u else {}),
@@ -63,6 +65,10 @@ def counted(b: dict[str, Any]) -> dict[str, Any]:
     totals = {k: sum(i["per_100"][k] * i["grams"] / 100 for i in items) for k in NUM}
     b["totals"] = {k: round(v, 1) for k, v in totals.items()}
     b["per_100"] = {k: round(totals[k] / cooked * 100, 2) for k in NUM}
+    vegs = [veg_of(i["per_100"]) for i in items]
+    if all(v is not None for v in vegs):  # every ingredient knows its veg
+        veg = sum((v or 0.0) * i["grams"] / 100 for v, i in zip(vegs, items, strict=True))
+        b["totals"][VEG], b["per_100"][VEG] = round(veg, 1), round(veg / cooked * 100, 2)
     u = [k for k in MACROS if any(k in i.get("unknown", ()) for i in items)]  # a macro any ingredient lacks
     if u:
         b["unknown"] = u

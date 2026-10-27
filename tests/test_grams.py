@@ -47,7 +47,9 @@ async def test_per_100_is_one_call_for_the_food_as_named(hass: HomeAssistant, se
     assert out == {"name": "Multigrain bread", "per_100": PER_100, "unit": "g", "source": "estimate"}
     assert [c["task"] for c in ai_calls] == [TASK]
     assert '"Multigrain bread"' in ai_calls[0]["instructions"] and "They say: toasted" in ai_calls[0]["instructions"]
-    assert set(ai_calls[0]["structure"]) == {"kcal_100", "protein_g_100", "carbs_g_100", "fat_g_100", "fibre_g_100", "unit"}
+    assert set(ai_calls[0]["structure"]) == {
+        *("kcal_100", "protein_g_100", "carbs_g_100", "fat_g_100", "fibre_g_100", "veg_g_100", "unit")
+    }
 
 
 async def test_per_100_without_a_hint_says_nothing_more(hass: HomeAssistant, setup, ai_calls, monkeypatch):

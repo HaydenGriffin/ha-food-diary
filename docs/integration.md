@@ -1,7 +1,8 @@
 # Food Diary integration reference
 
 `food_diary` is a Home Assistant custom integration that keeps a calorie and macro diary for each person. It can work out
-food from a meal photo, a nutrition label, a barcode (via Open Food Facts), a short description or a recipe. It provides
+food from a meal photo, a nutrition label, a barcode (via Open Food Facts), a short description, a recipe or a restaurant's
+menu. It provides
 sensors, goal numbers, services, a webhook for phone shortcuts and voice intents. Optionally, it can read a meal plan so
 planned meals count ahead of time.
 
@@ -67,7 +68,7 @@ Each diary adds one device, `<Person> food diary`, with these entities:
 
 | Entity | Unit | Notes |
 | --- | --- | --- |
-| `sensor.<person>_food_diary_calories_today` | kcal | Attributes: `goal`, `left`, `logged` (entry count), and `breakfast`, `lunch`, `dinner`, `snack` (kcal per meal). |
+| `sensor.<person>_food_diary_calories_today` | kcal | Attributes: `goal`, `left`, `logged` (entry count), `breakfast`, `lunch`, `dinner`, `snack` (kcal per meal), and `veg_g` and `veg_known` (today's [veg](#veg), 1.11.0). |
 | `sensor.<person>_food_diary_protein_today`, `…_carbs_today`, `…_fat_today`, `…_fibre_today` | g | Attributes: `goal`, `left`, and `incomplete` (how many of today's entries don't know this macro, when any: the state is then at least that much; see [Unknown numbers](#unknown-numbers)). |
 | `sensor.<person>_food_diary_calories_left` | kcal | Calories left against the goal (negative when over). Attribute: `goal`. |
 | `sensor.<person>_food_diary_last_logged` | timestamp | Attributes: `name`, `kcal`, `meal`, `entry_id`, `rev`. |
@@ -152,6 +153,24 @@ Background work that waits for the AI (the meal planner, recipe estimates, compl
 it started from and only keeps its answer if that is still the same afterwards. Food logged by hand, an edit, a deletion or
 a new plan in the meantime always wins.
 
+### Veg
+
+Since 1.11.0, food can say how much veg it has: `veg_g`, the grams of vegetables and pulses (beans, lentils, chickpeas)
+in it as eaten. Potatoes and fruit don't count. Veg is not one of the five numbers: it has no goal and isn't in `totals`.
+
+- **Unknown unless given.** An entry, estimate or saved meal without `veg_g` doesn't know its veg; that is never read as
+  0 (an explicit `0` is known). Nothing is worked out for food logged before 1.11.0, and food from a recipe's numbers
+  (the planner, `set_dish_nutrition`, a recipe's new numbers) doesn't know it.
+- **Entries** keep it like the other numbers: `veg_g` in `per_portion` (and in `per_100` when by weight) and for what was
+  eaten. Portions and grams scale it; copies, `get_recent` foods, Undo (`restore_food`, `restore_snapshot`, `undo_copy`)
+  keep it.
+- **Every estimate** with numbers gives it when the AI does (see [Estimating](#food_diaryestimate-response-only)). Open
+  Food Facts has no veg, so a barcode only knows it once a label photo taught the product book.
+- **Days** returned by `get_day`, `get_history` and `get_week_review` (each of its `days`) carry `veg_g` (what the
+  entries that know it add up to) and `veg_known` (how many entries know it). Show veg for a day only when `veg_known` is
+  above 0.
+- **Batches** know it when every ingredient's `per_100` does.
+
 ### Entry shape
 
 The responses below refer to an **entry**. It has this shape:
@@ -170,6 +189,7 @@ Some keys appear only when they apply:
 | Key | Meaning |
 | --- | --- |
 | `per_100`, `grams`, `unit` | The entry is by weight (a label, a barcode, a photo item, a batch bowl, or switched with `update_food`), so its numbers are `per_100 × grams` (unless `edited`). `unit` is `g` or `ml`. |
+| `veg_g` | Grams of vegetables and pulses in what was eaten, when known ([Veg](#veg), 1.11.0); also in `per_portion`, and in `per_100` when that knows it. |
 | `note`, `barcode`, `photo`, `image_url` | Extra details about the food. |
 | `plan_key` | The planned slot it came from (`"<date>|<meal>"`). |
 | `edited: true` | The numbers were typed by hand, so the planner and recipe updates leave them alone. |
@@ -202,13 +222,14 @@ Adds an entry. Give `kcal` (plus any macros) for one portion, or give `per_100` 
 | `person` | entity id | See [Choosing a diary](#choosing-a-diary). |
 | `name` | string | **Required**, except for a batch (then the batch's name). |
 | `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | For one portion, 0 to 20000 (not NaN or infinite; the same for every number below). |
+| `veg_g` | number | Grams of [veg](#veg) in one portion (1.11.0). Left out: not known. With `per_100` and no `veg_g` in it: the veg in `grams`, kept as veg per 100. |
 | `portions` | number | 0.05 to 50. Default 1. |
 | `meal` | meal | Defaults to the meal for the time of day (see below). |
 | `date` | date | |
 | `source` | string | One of the sources above. Default `manual`. |
 | `ref` | string | A recipe id (`dish_id`), a saved meal id, or a batch id (source `batch`). |
 | `note`, `barcode` | string | |
-| `per_100` | object | The five numbers per 100 g or 100 ml, each 0 to 20000. `kcal` is needed (0 is fine, for water: the entry is still by weight); a macro left out is unknown. It may carry its own `unknown` (1.10.0), like `update_food`'s; a macro listed there or in the top-level `unknown` is stored as 0. Needs `grams`. |
+| `per_100` | object | The five numbers per 100 g or 100 ml, each 0 to 20000, and `veg_g` when known (1.11.0). `kcal` is needed (0 is fine, for water: the entry is still by weight); a macro left out is unknown. It may carry its own `unknown` (1.10.0), like `update_food`'s; a macro listed there or in the top-level `unknown` is stored as 0. Needs `grams`. |
 | `grams` | number | The amount eaten, used with `per_100`: more than 0 ("per_100 needs grams: how much was eaten." otherwise, 1.10.0). |
 | `unit` | `g` or `ml` | |
 | `edited` | boolean | Marks the numbers as typed by hand. |
@@ -240,7 +261,7 @@ Changes an existing entry.
 | `date` | date | The day the entry is on. |
 | `portions` | number | |
 | `grams` | number | 0.1 to 20000. For entries that have `per_100` (or with `per_100`, below): the new amount, one portion. The numbers are `per_100 × grams`; numbers of your own (`edited`) are for the amount the entry had, so they scale with it (× new grams / old grams × portions) and stay `edited` (1.10.0; before, they were replaced by `per_100 × grams` and `edited` cleared). Unknown macros stay unknown. On an entry without `per_100`, `grams` alone does nothing. |
-| `per_100` | object | With `grams` only (1.10.0): the entry is by weight from now on. `{kcal, protein_g?, carbs_g?, fat_g?, fibre_g?, unknown?}`, each 0 to 20000, `kcal` needed (0 is fine); a macro left out or listed in its `unknown` is unknown (stored as 0). The entry gets this `per_100`, `unit` and `grams`, `portions: 1` and `per_portion = per_100 × grams / 100`; its name, meal, source, ref, note, photo, `client_id` and plan stay. Sent without `grams`: "per_100 needs grams: how much was eaten." Sent with `portions`, any of the five numbers or `unknown`: refused, as `per_100` and `grams` set them. |
+| `per_100` | object | With `grams` only (1.10.0): the entry is by weight from now on. `{kcal, protein_g?, carbs_g?, fat_g?, fibre_g?, veg_g?, unknown?}`, each 0 to 20000 (its veg is the entry's from then on: left out, the entry doesn't know its veg, 1.11.0), `kcal` needed (0 is fine); a macro left out or listed in its `unknown` is unknown (stored as 0). The entry gets this `per_100`, `unit` and `grams`, `portions: 1` and `per_portion = per_100 × grams / 100`; its name, meal, source, ref, note, photo, `client_id` and plan stay. Sent without `grams`: "per_100 needs grams: how much was eaten." Sent with `portions`, any of the five numbers, `veg_g` or `unknown`: refused, as `per_100` and `grams` set them. |
 | `unit` | `g` or `ml` | With `per_100`: what it is per. Default `g`. |
 | `edited` | boolean | With `per_100`: `true` when it was worked out from the person's own corrected numbers, so the entry stays `edited`. Left out or `false`: not `edited`. `unit` or `edited` without `per_100` is refused. |
 
@@ -253,7 +274,8 @@ follow a new `grams` ("This entry's own numbers aren't for a weight…"): switch
 its numbers.
 | `meal` | meal | |
 | `name` | string | |
-| `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | Your own numbers for the **whole** entry. Sets `edited`. |
+| `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | Your own numbers for the **whole** entry. Sets `edited`. The entry's veg stays as it was. |
+| `veg_g` | number | Your own grams of [veg](#veg) for the **whole** entry, like the five numbers (sets `edited`; 1.11.0). |
 | `checked` | boolean | `true` marks the entry as confirmed right. `false` clears it. |
 | `unknown` | list | Macros (`protein_g`, `carbs_g`, `fat_g`, `fibre_g`) that aren't known after all: stored as `0` and listed in the entry's [`unknown`](#unknown-numbers). Wins over a number sent for the same macro. Sets `edited`. Since 1.6.1. |
 | `expected_rev` | integer | Fail with `conflict` if the entry's `rev` isn't this. |
@@ -276,7 +298,7 @@ restore_food {"entry_id": "a1b2c3d4e5", "entry": <before>, "expected_rev": 3}
 #### `food_diary.restore_food` (response: optional)
 
 Undo of an `update_food` (1.10.0), exactly, including a switch to by weight: puts back what `update_food` can change
-(name, meal, portions, `per_portion`, the five numbers, `per_100`, `grams`, `unit`, `unknown`, `edited`, `checked`) as
+(name, meal, portions, `per_portion`, the five numbers, `veg_g`, `per_100`, `grams`, `unit`, `unknown`, `edited`, `checked`) as
 `entry` has it; one `entry` doesn't have is removed (so a switched entry is a portion entry again, and an entry that had
 no `unknown` key has none). Everything else (id, time, source, ref, note, photo, `client_id`) is the entry's own, which
 `update_food` never changes, and is not taken from `entry`. With `expected_rev` the `rev` that update made, the entry is
@@ -288,7 +310,7 @@ told as for an update: a meal moved back (`moved` or `restored`), a name put bac
 | `person` | entity id | |
 | `entry_id` | string | **Required.** |
 | `date` | date | The day the entry is on. |
-| `entry` | object | **Required.** `before` from `update_food`'s answer, as it was. Its numbers must be real (finite, 0 to 1,000,000,000, which every entry `update_food` makes stays under), `meal` one of the four, `unit` `g` or `ml`, and `per_100` and `grams` together; its `id`, when given, must be `entry_id`. |
+| `entry` | object | **Required.** `before` from `update_food`'s answer, as it was (with its `veg_g`, in `per_portion` and `per_100` too). Its numbers must be real (finite, 0 to 1,000,000,000, which every entry `update_food` makes stays under), `meal` one of the four, `unit` `g` or `ml`, and `per_100` and `grams` together; its `id`, when given, must be `entry_id`. |
 | `expected_rev` | integer | **Required.** The `rev` of `update_food`'s answer. If the entry has changed since (another change, the planner, a recipe's new numbers, a photo), nothing changes and the call fails with `conflict`. |
 
 **Response:** `{"entry": <entry>}`. Fails with "That entry isn't in the diary on that day." when it's gone (Undo doesn't
@@ -324,12 +346,15 @@ Fields: `person`, `date`.
 **Response:**
 
 ```json
-{"date": "…", "entries": [<entry>, …], "totals": {…}, "incomplete": {"protein_g": 1, "fibre_g": 2}, "goals": {…},
- "left": {…}, "meals": {"breakfast": 0, "lunch": 0, "dinner": 0, "snack": 0}}
+{"date": "…", "entries": [<entry>, …], "totals": {…}, "incomplete": {"protein_g": 1, "fibre_g": 2},
+ "veg_g": 210, "veg_known": 3, "goals": {…}, "left": {…},
+ "meals": {"breakfast": 0, "lunch": 0, "dinner": 0, "snack": 0}, "fullness": {"lunch": "full"}}
 ```
 
 Entries are sorted by meal, then by time. `left` only includes numbers that have a goal. `incomplete` is only there when
-an entry misses a macro ([Unknown numbers](#unknown-numbers)); `totals` and `left` count those as 0.
+an entry misses a macro ([Unknown numbers](#unknown-numbers)); `totals` and `left` count those as 0. `veg_g` and
+`veg_known` are the day's [veg](#veg); `fullness` has the day's [fullness](#fullness) answers, by meal (`{}` without
+any). Both since 1.11.0.
 
 #### `food_diary.get_history` (response: only)
 
@@ -339,11 +364,11 @@ Fields: `person`, `date` (the last day), `days` (1 to 366, default 7).
 
 ```json
 {"days": [{"date": "…", "kcal": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fibre_g": 0, "incomplete"?: {…},
-            "logged": 0}, …],
+            "veg_g": 0, "veg_known": 0, "logged": 0}, …],
  "goals": {…}}
 ```
 
-Days run from oldest to newest. `incomplete` as in `get_day`.
+Days run from oldest to newest. `incomplete`, `veg_g` and `veg_known` as in `get_day`.
 
 #### `food_diary.get_recent` (response: only)
 
@@ -364,27 +389,68 @@ A `<food>` is what you need to log it again:
 
 - `name`, `meal`, `source`, `ref`, and the five numbers for one portion;
 - `per_100`, `grams` and `unit` when the food has them;
+- `veg_g` (for one portion, and in `per_100`) when it knows its [veg](#veg);
 - `photo`, `image_url`, `barcode` and `image` when they exist;
 - `unknown` when some macros aren't known (send it back with `log_food`);
 - `times`.
 
 #### `food_diary.get_week_review` (response: only)
 
-Fields: `person`, `date` (the last day, default yesterday), `days` (1 to 31, default 7).
+Fields: `person`, `date` (the last day, default yesterday), `days` (1 to 35, default 7; 31 before 1.11.0).
 
 **Response:**
 
 ```json
-{"start": "…", "end": "…", "days": [<history day>, …], "goal_kcal": 2000, "goal_protein_g": 100,
+{"start": "…", "end": "…", "days": [<review day>, …], "goal_kcal": 2000, "goal_protein_g": 100,
  "days_logged": 5, "avg_kcal": 1840, "on_target": 3, "over": 1, "protein_days": 2, "last_week_avg_kcal": 1910,
- "favourite": {"name": "Porridge", "times": 4}, "new_dishes": ["Lasagne"], "best_day": {"date": "…", "kcal": 1990}}
+ "favourite": {"name": "Porridge", "times": 4}, "new_dishes": ["Lasagne"], "best_day": {"date": "…", "kcal": 1990},
+ "last_week": {"veg_g_avg": 190.5, "fibre_g_avg": 21.3, "veg_days": 5}}
 ```
+
+- **`days`:** oldest first, each a `get_history` day (with `fibre_g`, `veg_g`, `veg_known`) plus `meals`: calories per
+  meal, `{"breakfast": 320, "lunch": 0, "dinner": 800, "snack": 150}` (1.11.0). With `days: 28`, enough for weekdays
+  against weekends.
+- **`last_week`** (1.11.0): the 7 days before `start`, over the days with at least one entry that knows its
+  [veg](#veg) (`veg_days`): their average `veg_g` and `fibre_g` a day, `null` when there are none.
 
 - **`on_target`:** days at 75 to 105% of the calorie goal.
 - **`protein_days`:** days at 90% or more of the protein goal. A day with an unknown protein counts only when what is
   known already reaches it (its total is a lower bound).
 - **`favourite`**, **`best_day`** and **`last_week_avg_kcal`** can be `null`.
 - **`new_dishes`:** recipes (entries with a `ref`) not eaten in the previous 8 weeks, up to 5.
+
+### Fullness
+
+How full the person was a couple of hours after a meal (1.11.0): `hungry` (hungry again), `satisfied` or `full` (still
+full). One answer per day and meal, for `breakfast`, `lunch` and `dinner` (not snacks), kept in the person's diary for
+400 days. `get_day` shows a day's answers as `fullness`.
+
+#### `food_diary.set_fullness` (response: optional)
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `person` | entity id | |
+| `date` | date | The meal's day: today or up to 7 days before. A day still to come fails ("That day hasn't come yet."); an older one fails ("Fullness can only be given for today and the 7 days before."). |
+| `meal` | `breakfast`, `lunch` or `dinner` | **Required.** |
+| `fullness` | `hungry`, `satisfied`, `full` or `null` | **Required.** `null` takes the answer back. The same answer again changes nothing. |
+| `client_id` | string | See [Doing things once](#doing-things-once-and-revisions): the same id again changes nothing (so an answer sent again late can't overwrite a newer one) and answers with `duplicate: true`. |
+
+**Response:** `{"date": "<date>", "meal": "lunch", "fullness": "full" | null, "duplicate"?: true}`, with the answer as
+it is now.
+
+#### `food_diary.get_fullness` (response: only)
+
+Fields: `person`, `days` (1 to 400, default 60: today and the days before, that many in all).
+
+**Response:**
+
+```json
+{"answers": [{"date": "…", "meal": "lunch", "fullness": "full", "kcal": 830,
+              "foods": [{"name": "Curry", "kcal": 650}, {"name": "Salad", "kcal": 180}]}, …]}
+```
+
+Newest first (a day's dinner before its lunch). `kcal` and `foods` are that meal's entries in the diary now (the most
+calories first), so an answer follows changes to the meal; `foods` is empty when nothing is logged for it.
 
 ### Saved meals and copying
 
@@ -399,16 +465,17 @@ with an existing name replaces that saved meal.
 | `name` | string | **Required.** |
 | `date` | date | Ignored with `foods`. |
 | `meal` | meal | **Required.** |
-| `foods` | list | At most 50, each `{name, <five numbers>, unknown?}`, as `log_food` takes them (numbers 0 to 20000): saved as they are, whatever else that meal holds. Foods without calories are left out; other fields are ignored. |
+| `foods` | list | At most 50, each `{name, <five numbers>, veg_g?, unknown?}`, as `log_food` takes them (numbers 0 to 20000): saved as they are, whatever else that meal holds. Foods without calories are left out; other fields are ignored. |
 
 **Response:**
 
 ```json
-{"saved": {"id": "…", "name": "…", "meal": "…", "items": ["Porridge", "Banana"], <five numbers>, "unknown"?: […],
-           "at": "…"}}
+{"saved": {"id": "…", "name": "…", "meal": "…", "items": ["Porridge", "Banana"], <five numbers>, "veg_g"?: 60,
+           "unknown"?: […], "at": "…"}}
 ```
 
-`unknown` lists a macro any of its foods doesn't know (its number is then a lower bound).
+`unknown` lists a macro any of its foods doesn't know (its number is then a lower bound). `veg_g` is there when every
+food knows its [veg](#veg) (1.11.0).
 
 #### `food_diary.update_saved_meal` (response: optional)
 
@@ -462,7 +529,7 @@ days: older ones go when the diary loads, on `get_batches` and on `save_batch`.
 | `person` | entity id | |
 | `name` | string | **Required.** The same name (any case) on the same day replaces that batch, keeping its id. |
 | `date` | date | The day it was cooked. |
-| `ingredients` | list | **Required**, 1 to 50: each `{name, grams, per_100, cooked_factor?, ref?, unknown?}`, raw. `per_100` needs `kcal` (0 is fine, for water); its numbers and `grams` are 0 to 20000. `cooked_factor` defaults to 1. A macro `per_100` leaves out (or `unknown` lists) is unknown. Together they weigh at least 1 g ("Give each ingredient's raw weight (grams)." otherwise). |
+| `ingredients` | list | **Required**, 1 to 50: each `{name, grams, per_100, cooked_factor?, ref?, unknown?}`, raw. `per_100` needs `kcal` (0 is fine, for water) and may have `veg_g` (1.11.0); its numbers and `grams` are 0 to 20000. `cooked_factor` defaults to 1. A macro `per_100` leaves out (or `unknown` lists) is unknown. Together they weigh at least 1 g ("Give each ingredient's raw weight (grams)." otherwise). |
 | `cooked_g` | number | The whole pot weighed after cooking. Leave out to estimate it. |
 | `portions` | number | How many portions it made (0.5 to 100). |
 | `recipe_id` | string | The recipe it was cooked from. |
@@ -479,7 +546,9 @@ days: older ones go when the diary loads, on `get_batches` and on `save_batch`.
 ```
 
 `cooked_g` is the weighed weight, or Σ grams × `cooked_factor` (`cooked_estimated: true`). `per_100` is the cooked
-batch's: `totals` / `cooked_g` × 100. `unknown` lists a macro any ingredient lacks (its numbers are then a lower bound).
+batch's: `totals` / `cooked_g` × 100. When every ingredient's `per_100` has `veg_g`, `totals` and `per_100` have the
+batch's `veg_g` too (1.11.0), and a bowl logged from it knows its veg. `unknown` lists a macro any ingredient lacks
+(its numbers are then a lower bound).
 `refreshed` counts the entries that took a replaced batch's new numbers (see `update_batch`).
 
 #### `food_diary.update_batch` (response: optional)
@@ -542,14 +611,16 @@ Works out what something is and its numbers. It doesn't log anything.
 | Field | Type | Notes |
 | --- | --- | --- |
 | `person` | entity id | Chooses whose AI setting is used. |
-| `kind` | `photo`, `label`, `barcode`, `text`, `dish`, `ingredients` or `per_100` | **Required.** |
-| `image` | string | Base64. Required for `photo` and `label`. |
-| `hint` | string | `photo` and `per_100`. |
-| `name` | string | `per_100`: the food's name, up to 120 characters ("Multigrain bread"). Required for it. |
+| `kind` | `photo`, `label`, `barcode`, `text`, `dish`, `ingredients`, `per_100` or `menu` | **Required.** |
+| `image` | string | Base64. Required for `photo` and `label`; one menu photo for `menu`. |
+| `plate` | object | `photo` only (1.11.0): what the food is on, `{"kind": "plate" or "bowl", "cm"?: 10 to 40}` across, so the AI sizes the portions against it. |
+| `media` | list | `menu` only (1.11.0): 1 to 4 base64 photos of the menu. |
+| `hint` | string | `photo`, `per_100`, `menu`, and `dish` without `dish_id` (where it's eaten, like "at The Olive Tree"). |
+| `name` | string | `per_100`: the food's name, up to 120 characters ("Multigrain bread"). Required for it. `dish` without `dish_id`: the dish's name. |
 | `amount` | string | For `label` and `barcode`, e.g. "3 biscuits", "50 g" or "half the pack". |
 | `barcode` | string | EAN or UPC digits. Required for `barcode`, optional for `label`. |
 | `text` | string | For `text`, e.g. "2 eggs on toast". |
-| `dish_id` | string | Required for `dish`. |
+| `dish_id` | string | `dish`: the recipe. Left out, `dish` is a dish eaten out, by its `name` (or `dish_name`), 1.11.0. |
 | `dish_name` | string | `dish`, or the batch's name for `ingredients`. |
 | `ingredients` | list of strings | `dish` only. |
 | `servings` | number | `dish` only. |
@@ -564,13 +635,14 @@ amounts like "50 g", "3 biscuits" or "half the pack" are worked out without the 
 
 | Kind | Response |
 | --- | --- |
-| `photo` | `{name, <five numbers>, note, foods, meals?, source: "photo", photo}`. Pass `photo` to `log_food` to keep the picture with the entry. |
-| `text` | `{name, <five numbers>, note, foods, meals?, source: "text"}`. |
-| `label` | `{name, per_100, grams, unit, serving_g, pack_g, guessed, note, <five numbers>, source: "label", barcode?}`. |
+| `photo` | `{name, <five numbers>, veg_g?, note, foods, meals?, source: "photo", photo}`. Pass `photo` to `log_food` to keep the picture with the entry. |
+| `text` | `{name, <five numbers>, veg_g?, note, foods, meals?, source: "text"}`. |
+| `label` | `{name, per_100, grams, unit, serving_g, pack_g, guessed, note, <five numbers>, veg_g?, source: "label", barcode?}`. |
 | `barcode` | Like `label`, plus `source: "barcode"`, `barcode`, `product_source` and `image_url?`. |
-| `dish` | `{name, <five numbers>, source: "dish", ref: <dish_id>, nutrition_source}`. Freshly estimated answers also have `note` and `foods`. |
+| `dish` | `{name, <five numbers>, veg_g?, source: "dish", ref: <dish_id>, nutrition_source}`. Freshly estimated answers also have `note` and `foods`. Without `dish_id`: `{name, <five numbers>, veg_g?, note, foods, source: "estimate"}` (1.11.0). |
 | `ingredients` | `{items: [{name, grams, per_100, cooked_factor, unknown?}]}`, one per item asked, in order. |
-| `per_100` | `{name, per_100: {<five numbers>}, unit: "g" or "ml", unknown?, source: "estimate"}`. Since 1.10.0. |
+| `per_100` | `{name, per_100: {<five numbers>, veg_g?}, unit: "g" or "ml", unknown?, source: "estimate"}`. Since 1.10.0. |
+| `menu` | `{place?, dishes: [{name, description?, <five numbers>, veg_g?, grams?, unknown?}], source: "estimate"}`. Since 1.11.0. |
 
 `meals` (photo and text): the meals the food is usually eaten as, most usual first (`breakfast`, `lunch`, `dinner`, `snack`),
 when the AI said; an app can use it to suggest where food goes when nobody picked a meal. `log_food` ignores it.
@@ -620,6 +692,31 @@ To switch a logged entry, `update_food` (the `unknown` inside `per_100` only: a 
 
 `note` (photo and text): what one portion is, with about what it weighs ("1 slice, about 40 g"), so an app can show the
 weight and scale it with the portions.
+
+`veg_g` (1.11.0): every kind with numbers asks the AI for the grams of [veg](#veg) in it (vegetables and pulses;
+potatoes and fruit don't count; 0 when none): for one portion (`photo`, `text`, `dish`, each menu dish), or as `veg_g`
+in `per_100` (`per_100`, `label`, `ingredients`, each photo item). It is left out when the AI gives none that can be
+true (negative, not a number, more than 100 per 100 or 3000 g a portion): the food doesn't know its veg. A photo with
+items has what its items add up to, only when every item knows it (each item has `veg_g` for its grams and in its
+`per_100`). `label` judges it from what the product is (labels don't print it) and teaches it to the product book with
+the barcode; a product from Open Food Facts doesn't know it. `ingredients` takes the AI's for food that comes with its
+own `per_100` without `veg_g`. A recipe's answer kept for its `dish_id` keeps the AI's veg; numbers set with
+`set_dish_nutrition` don't have one. Send `veg_g` on with `log_food`.
+
+`plate` (photo, 1.11.0) goes into the prompt as "The plate is about 26 cm across." or "It is in a bowl about 18 cm
+across." (without `cm`: "It is on a plate." / "It is in a bowl."), so weights are sized against it.
+
+`menu` (1.11.0) reads 1 to 4 photos of a menu (`media`, or one as `image`) in one AI call. `dishes` are in the menu's
+order, at most 40, drinks and desserts included when listed; each is a typical restaurant portion as served, with the
+sides the menu lists with it. `description` is what the menu says it is or comes with; `grams` about what it weighs
+(left out when the AI doesn't say). A macro the AI leaves out is in the dish's `unknown` (0 in its numbers). A dish
+without a name or real calories (above 0, up to 5000) is left out. `place` is the restaurant's name when the menu shows
+it. When no dish can be read, it fails with "Couldn't read a menu in that photo." Nothing is kept. To log a dish, send
+its numbers (and `veg_g`, `unknown`) to `log_food` as one portion, with `source: "estimate"`.
+
+`dish` without `dish_id` (1.11.0) is a dish eaten out, by its `name`: one portion as a restaurant or café usually serves
+it, with its usual sides; `hint` says where ("at The Olive Tree"). One AI call, nothing kept, and the answer keeps the
+name asked. Without a name either: "Add dish_id, or the dish's name."
 
 Every kind adds `unknown` when the answer lacks a macro (the AI left it out, or Open Food Facts doesn't list it); its
 number is then 0. Send it on with `log_food`.
@@ -975,7 +1072,7 @@ are trusted again for the ingredients of the time. The check appears on `get_dis
 ## Storage and privacy
 
 - **Diary data** lives in Home Assistant's `.storage` folder:
-  - `food_diary.<person>`: each person's diary, with its `client_id` ledger, saved meals and batches;
+  - `food_diary.<person>`: each person's diary, with its `client_id` ledger, saved meals, batches and fullness answers;
   - `food_diary.dishes`: the shared recipe book;
   - `food_diary.products`: barcodes learned from Open Food Facts or label photos.
 - **Photos sent for estimates** are kept for 30 days in local media, under `food_diary/`, so AI Task can attach them.

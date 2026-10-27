@@ -47,6 +47,14 @@ log_food:
           step: 0.1
           mode: box
           unit_of_measurement: g
+    veg_g:
+      selector:
+        number:
+          min: 0
+          max: 20000
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
     portions:
       default: 1
       selector:
@@ -209,6 +217,14 @@ update_food:
         number:
           min: 0
           max: 500
+          step: 0.1
+          mode: box
+          unit_of_measurement: g
+    veg_g:
+      selector:
+        number:
+          min: 0
+          max: 20000
           step: 0.1
           mode: box
           unit_of_measurement: g
@@ -387,6 +403,7 @@ estimate:
           - dish
           - ingredients
           - per_100
+          - menu
     image:
       selector:
         text: {}
@@ -435,6 +452,14 @@ estimate:
     name:
       selector:
         text: {}
+    plate:
+      example: '{"kind": "plate", "cm": 26}'
+      selector:
+        object: {}
+    media:
+      example: '["<base64 JPEG>", "<base64 JPEG>"]'
+      selector:
+        object: {}
 get_dish_nutrition:
   fields:
     dish_id:
@@ -650,7 +675,48 @@ get_week_review:
       selector:
         number:
           min: 1
-          max: 31
+          max: 35
+set_fullness:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    date:
+      selector:
+        date: {}
+    meal:
+      required: true
+      selector:
+        select:
+          options:
+          - breakfast
+          - lunch
+          - dinner
+    fullness:
+      required: true
+      selector:
+        select:
+          options:
+          - hungry
+          - satisfied
+          - full
+    client_id:
+      selector:
+        text: {}
+get_fullness:
+  fields:
+    person:
+      selector:
+        entity:
+          domain: person
+    days:
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 400
+          mode: box
 get_dishes:
   fields:
     person:

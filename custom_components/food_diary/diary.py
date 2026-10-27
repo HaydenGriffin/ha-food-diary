@@ -22,6 +22,11 @@ never kcal) its writer didn't give: stored as 0, so sums stay a lower bound, and
 saved and planned food brings its source's unknowns along; new numbers for one take it off the list. Entries from before
 it have no `unknown`: one with calories and no protein, carbs or fat at all reads as calories only (entry_unknown). A day
 says how many entries with calories miss each macro (`incomplete`), next to its unchanged `totals`.
+
+Veg (`veg_g`: grams of vegetables and pulses in what was eaten; potatoes and fruit don't count) is known only where it
+was given: an entry without it is unknown, never 0, and nothing is worked out for older entries. It sits with the other
+numbers (per_portion, per_100) and follows portions and grams like them; a day sums the entries that know it (`veg_g`)
+and says how many do (`veg_known`). A day also has the person's fullness after its meals (fullness.py).
 """
 
 from __future__ import annotations
@@ -42,13 +47,13 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import DEFAULT_GOALS, DOMAIN, MACROS, MEALS, NUM
+from .const import DEFAULT_GOALS, DOMAIN, MACROS, MEALS, NUM, VEG
 
 PLANNED = ("breakfast", "lunch", "dinner")  # the meals a plan has (sources.PLANNED_MEALS)
 STORE_VERSION = 1  # rev, client_id and the client_id ledger are additions older versions load (and ignore) as they are
 KEPT = ("estimate", "portions", "dismissed")  # a dish's book entry: kept through new numbers (see checks.py)
 # what update can change on an entry (besides its rev, and plan_key / plan_was, which follow its meal): put_back's fields
-UNDONE = ("name", "meal", "portions", "per_portion", *NUM, "per_100", "grams", "unit", "unknown", "edited", "checked")
+UNDONE = ("name", "meal", "portions", "per_portion", *NUM, VEG, "per_100", "grams", "unit", "unknown", "edited", "checked")
 ENTRY_MAX = 1_000_000_000  # no entry's number goes over this (an update that would is refused): restore_food takes them all
 NOT_COPIED = ("id", "at", "rev", "client_id", "plan_key", "plan_was", "edited")  # a copied entry is a new entry
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +91,60 @@ def nums(src: dict[str, Any] | None) -> dict[str, float]:
 
 def totals(entries: list[dict[str, Any]]) -> dict[str, float]:
     return {k: round(float(sum(num(e.get(k)) for e in entries)), 1) for k in NUM}
+
+
+def veg_of(src: dict[str, Any] | None) -> float | None:
+    """The veg (VEG) a writer's numbers give: an explicit 0 is known; left out, None or not a real amount is unknown."""
+    v = (src or {}).get(VEG)
+    return round(num(v), 2) if given(v) and num(v) >= 0 else None
+
+
+def with_veg(numbers: dict[str, Any], veg: float | None) -> dict[str, Any]:
+    """`numbers` with their veg set to `veg`, or without veg when it isn't known."""
+    if veg is None:
+        numbers.pop(VEG, None)
+    else:
+        numbers[VEG] = veg
+    return numbers
+
+
+def of_grams(per_100: dict[str, Any], grams: float) -> dict[str, Any]:
+    """What `grams` of something come to, by its numbers per 100 (veg too, when they know it)."""
+    amount = {k: round(num(per_100.get(k)) * grams / 100, 2) for k in NUM}
+    return with_veg(amount, None if (v := veg_of(per_100)) is None else round(v * grams / 100, 2))
+
+
+def weighed(per_100: dict[str, Any], grams: float, unknown: Any = ()) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Numbers per 100 as an entry keeps them (an unknown macro as 0, veg when it's known) and what `grams` of it come to."""
+    kept = with_veg({k: 0.0 if k in unknown else v for k, v in nums(per_100).items()}, veg_of(per_100))
+    return kept, of_grams(kept, grams)
+
+
+def veg_day(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """A day's veg: what the entries that know it add up to (`veg_g`) and how many of them do (`veg_known`)."""
+    known = [v for e in entries if (v := veg_of(e)) is not None]
+    return {VEG: round(float(sum(known)), 1), "veg_known": len(known)}
+
+
+def veg_week(days: list[dict[str, Any]]) -> dict[str, Any]:
+    """Veg and fibre a day over the days that know some veg (`veg_known`): their averages (None without any) and how many."""
+    known = [d for d in days if d["veg_known"]]
+
+    def avg(k: str) -> float | None:
+        return round(sum(d[k] for d in known) / len(known), 1) if known else None
+
+    return {"veg_g_avg": avg(VEG), "fibre_g_avg": avg("fibre_g"), "veg_days": len(known)}
+
+
+def days_before(start: str, n: int) -> list[str]:
+    """The `n` days before `start`, oldest first."""
+    first = date.fromisoformat(start)
+    return [(first - timedelta(days=i)).isoformat() for i in range(n, 0, -1)]
+
+
+def meal_kcal(entries: list[dict[str, Any]]) -> dict[str, float]:
+    """Calories per meal."""
+    return {m: round(sum(num(e.get("kcal")) for e in entries if e.get("meal") == m), 1) for m in MEALS}
 
 
 def given(v: Any) -> bool:
@@ -144,9 +203,10 @@ def incomplete(entries: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def day_totals(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """A day's totals as history and the week review list them, with `incomplete` when an entry misses a macro."""
+    """A day's totals as history and the week review list them, with `incomplete` when an entry misses a macro, and its
+    veg (veg_day)."""
     inc = incomplete(entries)
-    return {**totals(entries), **({"incomplete": inc} if inc else {})}
+    return {**totals(entries), **({"incomplete": inc} if inc else {}), **veg_day(entries)}
 
 
 def meal_now() -> str:
@@ -179,7 +239,7 @@ def rev(e: dict[str, Any]) -> int:
 
 def too_big(e: dict[str, Any]) -> bool:
     """Whether an entry's numbers (for what was eaten, or per portion) went over ENTRY_MAX."""
-    return any(num(e.get(k)) > ENTRY_MAX or num((e.get("per_portion") or {}).get(k)) > ENTRY_MAX for k in NUM)
+    return any(num(e.get(k)) > ENTRY_MAX or num((e.get("per_portion") or {}).get(k)) > ENTRY_MAX for k in (*NUM, VEG))
 
 
 def conflict() -> ServiceValidationError:
@@ -228,6 +288,7 @@ class Diary:
             self.data["saved"] = stored.get("saved") or []
             self.data["client_ids"] = stored.get("client_ids") or {}
             self.data["batches"] = stored.get("batches") or []  # batches.py
+            self.data["fullness"] = stored.get("fullness") or {}  # fullness.py
         for entries in self.data["days"].values():
             for e in entries:
                 e.setdefault("rev", 1)
@@ -333,9 +394,11 @@ class Diary:
             "entries": entries,
             "totals": t,
             **({"incomplete": inc} if inc else {}),
+            **veg_day(entries),
             "goals": dict(self.goals),
             "left": {k: round(num(goals[k]) - t[k], 1) for k in goals},
-            "meals": {m: round(sum(num(e.get("kcal")) for e in entries if e.get("meal") == m), 1) for m in MEALS},
+            "meals": meal_kcal(entries),
+            "fullness": {m: v for m, v in (self.data.get("fullness") or {}).get(d, {}).items() if v},
         }
 
     def history(self, end: str, days: int) -> dict[str, Any]:
@@ -378,12 +441,18 @@ class Diary:
                 out[k[0]].append({**again(latest[k]), "meal": k[0], "times": len(ds)})
         return out
 
+    def review_day(self, d: str) -> dict[str, Any]:
+        """One day as the look back lists it: its totals, veg and entries logged, with calories per meal."""
+        entries = self.entries(d)
+        return {"date": d, **day_totals(entries), "logged": len(entries), "meals": meal_kcal(entries)}
+
     def review(self, end: str, days: int = 7) -> dict[str, Any]:
         """A look back over a week: one clear headline (days on target) and only what stands out."""
         last = date.fromisoformat(end)
         span = [(last - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
         goal, pgoal = num(self.goals.get("kcal")), num(self.goals.get("protein_g"))
-        rows = [{"date": d, **day_totals(self.entries(d)), "logged": len(self.entries(d))} for d in span]
+        rows = [self.review_day(d) for d in span]
+        week_before = [veg_day(self.entries(d)) | totals(self.entries(d)) for d in days_before(span[0], 7)]
         logged = [r for r in rows if r["logged"]]
         on_target = [r for r in logged if goal and goal * 0.75 <= r["kcal"] <= goal * 1.05]
         before = [(last - timedelta(days=days + i)).isoformat() for i in range(days)]
@@ -417,6 +486,7 @@ class Diary:
             "favourite": {"name": top[0][0], "times": top[0][1]} if top and top[0][1] >= 2 else None,
             "new_dishes": new[:5],
             "best_day": {"date": best["date"], "kcal": best["kcal"]} if best else None,
+            "last_week": veg_week(week_before),
         }
 
     def _back(self, days: int) -> list[str]:
@@ -436,7 +506,9 @@ class Diary:
     def save_foods(self, name: str, meal: str, foods: list[dict[str, Any]]) -> dict[str, Any] | None:
         """Keep these foods (name and numbers, as log_food takes them) as one meal, without looking at the diary."""
         return self._save(
-            name, meal, [{"name": str(f["name"]).strip()[:80], **values_of(f)} for f in foods if num(f.get("kcal")) > 0]
+            name,
+            meal,
+            [with_veg({"name": str(f["name"]).strip()[:80], **values_of(f)}, veg_of(f)) for f in foods if num(f.get("kcal")) > 0],
         )
 
     def _save(self, name: str, meal: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -450,6 +522,7 @@ class Diary:
             "items": [e["name"] for e in items],
             **totals(items),
             **({"unknown": list(inc)} if (inc := incomplete(items)) else {}),  # a macro any of its foods misses
+            **({VEG: veg_day(items)[VEG]} if all(veg_of(e) is not None for e in items) else {}),  # every food knows it
             "at": dt_util.now().isoformat(timespec="minutes"),
         }
         self.data["saved"] = [x for x in self.saved if x["name"].lower() != clean.lower()] + [s]
@@ -550,15 +623,17 @@ class Diary:
         per_100 = None
         if by_weight and grams:  # by weight (a label, a barcode, an estimate per 100 g): per_100 x grams
             unknown = unknown_in(f["per_100"], f.get("unknown"))
-            per_100 = {k: 0.0 if k in unknown else v for k, v in nums(f["per_100"]).items()}  # an unknown is stored as 0
-            per_portion = {k: round(per_100[k] * grams / 100, 2) for k in NUM}
+            given_100 = dict(f["per_100"])
+            if veg_of(given_100) is None and (veg := veg_of(f)) is not None:  # veg for what was eaten: per 100 from it
+                given_100[VEG] = veg * 100 / grams
+            per_100, per_portion = weighed(given_100, grams, unknown)  # an unknown is stored as 0
             portions = 1.0
         elif by_weight:  # no weight (only from before 1.10.0; log_food needs one now): kept as it came
-            per_100 = nums(f["per_100"])
-            per_portion = nums(f.get("per_portion") or f)
+            per_100 = with_veg(nums(f["per_100"]), veg_of(f["per_100"]))
+            per_portion = with_veg(nums(f.get("per_portion") or f), veg_of(f.get("per_portion") or f))
             unknown = unknown_in(f.get("per_portion") or f, f.get("unknown"))
         else:
-            per_portion = nums(f.get("per_portion") or f)
+            per_portion = with_veg(nums(f.get("per_portion") or f), veg_of(f.get("per_portion") or f))
             unknown = unknown_in(f.get("per_portion") or f, f.get("unknown"))
         entry: dict[str, Any] = {
             "id": uuid.uuid4().hex[:10],
@@ -609,9 +684,11 @@ class Diary:
             if num(f.get("portions")):
                 e["portions"] = num(f["portions"])
             said = [k for k in MACROS if k in (f.get("unknown") or ())]  # put back to unknown (Undo after a fix): 0
-            if any(k in f for k in NUM) or said:  # the person's own numbers for the whole entry
+            if any(k in f for k in (*NUM, VEG)) or said:  # the person's own numbers for the whole entry
                 p = num(e.get("portions")) or 1.0
+                veg = veg_of(f) if VEG in f else veg_of(e)  # veg stays as it was unless it's given
                 e["per_portion"] = {k: 0.0 if k in said else round((num(f[k]) if k in f else num(e.get(k))) / p, 2) for k in NUM}
+                with_veg(e["per_portion"], None if veg is None else round(veg / p, 2))
                 e["edited"] = True
                 unknown = [k for k in MACROS if k in said or (k in unknown and not given(f.get(k)))]  # given now: known
             e["unknown"] = unknown
@@ -642,13 +719,13 @@ class Diary:
         so (numbers per 100 worked out from the person's own). Returns its unknown macros: the ones `per_100` leaves out or
         lists in its `unknown`."""
         grams, unknown = round(num(f["grams"]), 1), unknown_in(f["per_100"])
-        per_100 = {k: 0.0 if k in unknown else v for k, v in nums(f["per_100"]).items()}  # an unknown is stored as 0
+        per_100, per_portion = weighed(f["per_100"], grams, unknown)  # an unknown is stored as 0; veg as it gives it
         e.update(
             per_100=per_100,
             unit="ml" if f.get("unit") == "ml" else "g",
             grams=grams,
             portions=1.0,
-            per_portion={k: round(per_100[k] * grams / 100, 2) for k in NUM},
+            per_portion=per_portion,
         )
         if f.get("edited"):
             e["edited"] = True
@@ -669,9 +746,11 @@ class Diary:
             )
         if e.get("edited"):
             p = num(e.get("portions")) or 1.0
+            veg = veg_of(e["per_portion"])
             e["per_portion"] = {k: round(num(e["per_portion"].get(k)) * p * grams / was, 2) for k in NUM}
+            with_veg(e["per_portion"], None if veg is None else round(veg * p * grams / was, 2))
         else:
-            e["per_portion"] = {k: round(num(e["per_100"].get(k)) * grams / 100, 2) for k in NUM}
+            e["per_portion"] = of_grams(e["per_100"], grams)
             e.pop("edited", None)
         e.update(grams=grams, portions=1.0)
 
@@ -755,9 +834,9 @@ class Diary:
             for e in self.entries(d):
                 if e.get("ref") != ref or e.get("source") != source or e.get("edited") or not e.get("per_100"):
                     continue
-                if nums(e["per_100"]) != nums(per_100) or entry_unknown(e) != list(unknown):
-                    grams = num(e.get("grams"))
-                    e.update(per_100=nums(per_100), per_portion={k: round(num(per_100.get(k)) * grams / 100, 2) for k in NUM})
+                new = with_veg(nums(per_100), veg_of(per_100))
+                if with_veg(nums(e["per_100"]), veg_of(e["per_100"])) != new or entry_unknown(e) != list(unknown):
+                    e.update(per_100=new, per_portion=of_grams(per_100, num(e.get("grams"))))
                     e["unknown"] = list(unknown)
                     self._recount(e)
                     self._changed_entry(e)
@@ -827,9 +906,10 @@ class Diary:
         entry = self._new_entry({**c, "edited": e.get("edited", False)})
         entry.update(
             portions=num(e.get("portions")) or 1.0,
-            per_portion=nums(e.get("per_portion") or e),
+            per_portion=with_veg(nums(e.get("per_portion") or e), veg_of(e.get("per_portion") or e)),
             **{k: round(num(e.get(k)), 1) for k in NUM},
         )
+        with_veg(entry, veg_of(e))
         if isinstance(e.get("per_100"), dict):
             entry.update({k: copy.deepcopy(e[k]) for k in ("per_100", "grams", "unit") if k in e})
         set_unknown(entry, entry_unknown(e))
@@ -924,6 +1004,7 @@ class Diary:
     def _recount(e: dict[str, Any]) -> None:
         p = num(e.get("portions")) or 1.0
         e.update({k: round(num(e["per_portion"].get(k)) * p, 1) for k in NUM})
+        with_veg(e, None if (v := veg_of(e["per_portion"])) is None else round(v * p, 1))
         set_unknown(e, entry_unknown(e))
 
 

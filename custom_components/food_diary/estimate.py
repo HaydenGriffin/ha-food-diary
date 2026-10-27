@@ -10,9 +10,13 @@
   weight; "1 onion" becomes grams. Known products (a per_100 given, a barcode in the product book) keep their own numbers.
   Answers are matched to ingredients by number; one left without a weight or calories fails the whole estimate.
 - per_100: one food by its name, its numbers per 100 g (or 100 ml for a drink) as eaten, so an app can log it by weight.
+- menu: photos of a menu; each dish on it, in the menu's order, as a typical restaurant portion.
+- a dish by its name where it's eaten out ("at" a place, in the hint): one portion as it is usually served there.
 - a whole recipe: everything its ingredients add up to, for checking the numbers a recipe came with (checks.py).
 
 Every answer is per what was eaten, with per_100 and grams when they are known, and nothing is saved to the diary here.
+Every AI answer with numbers also gives its veg (`veg_g`, or `veg_g` in per_100): the grams of vegetables and pulses in
+it; left out when the AI gives none that can be true. Open Food Facts has no veg, so a product from it doesn't know it.
 Prompts mention the home's country (Settings → System → General) when it is set, so portion sizes match local habits.
 """
 
@@ -34,8 +38,8 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .batches import cooked_factor
-from .const import MACROS, MAX_IMAGE_BYTES, MEALS, NUM, OFF_FIELDS, OFF_URL, OFF_USER_AGENT, PHOTO_DAYS, PHOTO_DIR
-from .diary import Book, given, num, unknown_in, values_of
+from .const import MACROS, MAX_IMAGE_BYTES, MEALS, NUM, OFF_FIELDS, OFF_URL, OFF_USER_AGENT, PHOTO_DAYS, PHOTO_DIR, VEG
+from .diary import Book, given, num, unknown_in, values_of, veg_of, with_veg
 
 _LOGGER = logging.getLogger(__name__)
 LABELS = {
@@ -46,6 +50,17 @@ LABELS = {
     "fibre_g": "Fibre in grams",
 }
 NUMBER = {"number": {"min": 0, "max": 10000, "step": 0.1, "mode": "box"}}
+VEG_WORDS = "vegetables and pulses (beans, lentils, chickpeas; potatoes and fruit don't count)"
+VEG_FIELD = {"description": f"Grams of {VEG_WORDS} in ONE portion as eaten; 0 if none", "required": True, "selector": NUMBER}
+VEG_100_FIELD = {"description": f"Grams of {VEG_WORDS} per 100 g (or 100 ml); 0 if none", "required": True, "selector": NUMBER}
+VEG_ASK = (
+    " Also give veg_g: the grams of vegetables and pulses (beans, lentils, chickpeas) in it as eaten; potatoes and fruit "
+    "don't count; 0 when there are none."
+)
+VEG_100_ASK = (
+    " Also give veg_g_100: the grams of vegetables and pulses (beans, lentils, chickpeas) per 100 g (or 100 ml) of it; "
+    "potatoes and fruit don't count; 0 when there are none."
+)
 
 MEAL_STRUCTURE = {
     "name": {
@@ -55,6 +70,7 @@ MEAL_STRUCTURE = {
     },
     "foods": {"description": "The foods you can see or that it contains", "selector": {"text": {"multiple": True}}},
     **{k: {"description": f"{v} for ONE portion", "required": True, "selector": NUMBER} for k, v in LABELS.items()},
+    "veg_g": VEG_FIELD,
     "note": {
         "description": 'One short line on what the portion is, always with about what it weighs (like "1 bowl, about 350 g")',
         "selector": {"text": {}},
@@ -89,6 +105,11 @@ LABEL_STRUCTURE = {
         "selector": NUMBER,
     },
     "pack_g": {"description": "The whole pack in g or ml, as printed (0 if not given)", "required": True, "selector": NUMBER},
+    "veg_g_100": {
+        "description": f"Grams of {VEG_WORDS} per 100 g (or 100 ml), judged from what the product is and its ingredients",
+        "required": True,
+        "selector": NUMBER,
+    },
     "eaten_g": {
         "description": "How many g or ml were eaten, worked out from what they say (0 if they said nothing)",
         "required": True,
@@ -105,6 +126,7 @@ ITEM_FIELDS = {
     "grams": {"required": True, "selector": NUMBER},
     "unit": {"required": True, "selector": {"text": {}}},
     **{f"{k}_100": {"required": True, "selector": NUMBER} for k in LABELS},
+    "veg_g_100": VEG_100_FIELD,
 }
 PHOTO_STRUCTURE = {
     **FIT_STRUCTURE,
@@ -123,6 +145,7 @@ INGREDIENT_FIELDS = {
     "name": {"required": True, "selector": {"text": {}}},
     "grams": {"required": True, "selector": NUMBER},
     **{f"{k}_100": {"required": True, "selector": NUMBER} for k in LABELS},
+    "veg_g_100": VEG_100_FIELD,
     "cooked_factor": {"required": True, "selector": {"number": {"min": 0.2, "max": 4, "step": 0.05, "mode": "box"}}},
 }
 INGREDIENTS_STRUCTURE = {
@@ -141,10 +164,26 @@ PER_100_STRUCTURE = {
         }
         for k, v in LABELS.items()
     },
+    "veg_g_100": VEG_100_FIELD,
     "unit": {
         "description": '"ml" for a drink, else "g": what the numbers are per 100 of',
         "required": True,
         "selector": {"text": {}},
+    },
+}
+# a menu: each dish on it, in its order, as a typical restaurant portion
+MENU_DISH_FIELDS = {
+    "name": {"description": "The dish as the menu names it", "required": True, "selector": {"text": {}}},
+    "description": {"description": "What the menu says it is or comes with, short", "selector": {"text": {}}},
+    **{k: {"description": f"{v} for one portion as served", "required": True, "selector": NUMBER} for k, v in LABELS.items()},
+    "veg_g": VEG_FIELD,
+    "grams": {"description": "About what one portion weighs as served, in g (or ml for a drink)", "selector": NUMBER},
+}
+MENU_STRUCTURE = {
+    "place": {"description": "The restaurant's or café's name, if the menu shows it; empty if not", "selector": {"text": {}}},
+    "dishes": {
+        "description": "Each dish, drink and dessert on the menu, in the menu's order",
+        "selector": {"object": {"fields": MENU_DISH_FIELDS, "multiple": True}},
     },
 }
 AMOUNT_STRUCTURE = {
@@ -160,14 +199,17 @@ PHOTO_PROMPT = (
     "Also list the items: each separate food or drink you can see (the chicken, the potatoes, the broccoli, the gravy), "
     "one item each, with name (short English, sentence case), grams (about what that item weighs as served; for a drink, "
     'ml), unit ("g", or "ml" for a drink) and its calories, protein, carbohydrates, fat and fibre per 100 g (or 100 ml) as '
-    "it is cooked and served (kcal_100, protein_g_100, carbs_g_100, fat_g_100, fibre_g_100). One dish that is eaten as one "
-    "thing (a bowl of soup, a sandwich, a pizza slice) is one item. The items should add up to the meal's numbers.{hint}"
+    "it is cooked and served (kcal_100, protein_g_100, carbs_g_100, fat_g_100, fibre_g_100), and veg_g_100: the grams of "
+    "vegetables and pulses per 100 g of it. One dish that is eaten as one thing (a bowl of soup, a sandwich, a pizza slice) "
+    "is one item. The items should add up to the meal's numbers." + VEG_ASK + "{plate}{hint}"
 )
 LABEL_PROMPT = (
     "This is a photo of the nutrition label on a food or drink pack. Read the values PER 100 g (or per 100 ml): calories (kcal, "
     "not kJ), protein, carbohydrate, fat and fibre. If the label only gives values per serving, convert them to per 100 using "
     "the serving size. Also read the serving or piece size and the pack size if printed, the product name if you can see it, "
-    "and the barcode digits if a barcode is in the photo.\n"
+    "and the barcode digits if a barcode is in the photo. Labels don't print it, so judge veg_g_100 from what the product is "
+    "and its ingredients: the grams of vegetables and pulses (beans, lentils, chickpeas) per 100 g; potatoes and fruit don't "
+    "count; 0 when there are none.\n"
     "Then work out eaten_g, how much {who} ate in g or ml, from what they say: a weight is that weight; 'half the pack' is "
     "half the pack size; '2 biscuits' or '1 serving' uses the printed serving or piece size. "
     "If they said nothing, eaten_g is 0.\n"
@@ -182,11 +224,11 @@ TEXT_PROMPT = (
     "they wrote (if no amount is given, one normal portion): calories, protein, carbohydrates, fat and fibre in grams. Food "
     "names in other languages are fine; answer in English. Also say which meals it is usually eaten as (breakfast, lunch, "
     "dinner or snack), the most usual first. In the note, say what the portion is and about what it weighs in g (or ml for "
-    'a drink), like "1 slice, about 40 g".'
+    'a drink), like "1 slice, about 40 g".' + VEG_ASK
 )
 DISH_PROMPT = (
     "Estimate the nutrition for ONE portion of this home-cooked dish. The INGREDIENTS are {per}. Give calories, protein, "
-    "carbohydrates, fat and fibre in grams for one portion.\n\nDISH: {name}\nINGREDIENTS: {ingredients}"
+    "carbohydrates, fat and fibre in grams for one portion." + VEG_ASK + "\n\nDISH: {name}\nINGREDIENTS: {ingredients}"
 )
 INGREDIENTS_PROMPT = (
     "These are the RAW ingredients {who} put in a pot to cook a batch of {name}{where}, numbered. For each one, in the "
@@ -195,16 +237,32 @@ INGREDIENTS_PROMPT = (
     "carbohydrates, fat and fibre per 100 g RAW (kcal_100, protein_g_100, carbs_g_100, fat_g_100, fibre_g_100) and "
     "cooked_factor: its weight after cooking divided by its raw weight (dry pasta, rice and grains take up water, about 2 "
     "to 2.5; meat loses fat and water, about 0.7; onions and vegetables soften, about 0.8; a tin of tomatoes or stock "
-    "simmers down, about 0.7; oil and spices about 1).\n"
+    "simmers down, about 0.7; oil and spices about 1), and veg_g_100: the grams of vegetables and pulses (beans, lentils, "
+    "chickpeas) per 100 g raw (potatoes and fruit don't count; 0 when it isn't one).\n"
     "INGREDIENTS:\n{lines}"
 )
 PER_100_PROMPT = (
     '{who} (one adult{where}) eats "{name}". Give its nutrition PER 100 g as it is eaten: cooked, prepared or served as '
     "the name says (raw only when it says raw): calories, protein, carbohydrates, fat and fibre in grams (kcal_100, "
     'protein_g_100, carbs_g_100, fat_g_100, fibre_g_100). For a drink, give them per 100 ml and unit "ml"; otherwise unit '
-    '"g". Food names in other languages are fine.{hint}'
+    '"g". Food names in other languages are fine.' + VEG_100_ASK + "{hint}"
 )
-DISH_NAME_PROMPT = "Estimate the nutrition for ONE normal home-cooked portion{where} of: {name}."
+DISH_NAME_PROMPT = "Estimate the nutrition for ONE normal home-cooked portion{where} of: {name}." + VEG_ASK
+EATING_OUT_PROMPT = (
+    '{who} (one adult{where}) is eating out and having "{name}". Estimate the nutrition for ONE portion as a restaurant or '
+    "café usually serves it, with the sides it usually comes with: calories, protein, carbohydrates, fat and fibre in grams. "
+    "Food names in other languages are fine; answer in English. In the note, say what the portion is and about what it "
+    'weighs in g (or ml for a drink), like "1 plate, about 450 g".' + VEG_ASK + "{hint}"
+)
+MENU_PROMPT = (
+    "These are photos of a menu at a restaurant or café{where}, where {who} (one adult) is eating. List every dish on it, "
+    "drinks and desserts too, in the order the menu lists them (at most {most}), one each: name (as the menu names it), "
+    "description (what it says it is or comes with, short), and for a typical restaurant portion as it is served, with the "
+    "sides the menu lists with it: calories, protein, carbohydrates, fat and fibre in grams, veg_g (the grams of vegetables "
+    "and pulses: beans, lentils, chickpeas; potatoes and fruit don't count; 0 when there are none) and grams (about what it "
+    "weighs as served, or ml for a drink). Also give place: the restaurant's or café's name if the menu shows it. If the "
+    "photos don't show a menu you can read, give no dishes.{hint}"
+)
 WHOLE_PROMPT = (
     "Add up the nutrition of ALL these ingredients together, in the amounts listed: the whole lot, NOT one portion. Count "
     "what ends up eaten (leave out water, and oil for deep frying); a vague amount (a pinch, a handful, ½ an onion) is the "
@@ -217,6 +275,25 @@ WHOLE_STRUCTURE = {
 
 
 MAX_ITEMS = 12
+MAX_DISHES = 40
+MAX_MEDIA = 4
+VEG_MAX = 3000  # grams of veg one portion can have
+NO_MENU = "Couldn't read a menu in that photo."
+
+
+def veg_part(v: float | None) -> dict[str, float]:
+    """{"veg_g": v} when the veg is known, else nothing."""
+    return {} if v is None else {VEG: round(v, 1)}
+
+
+def plate_line(plate: dict[str, Any] | None) -> str:
+    """What a photo's food is on, for the prompt: "The plate is about 26 cm across." (nothing when it isn't said)."""
+    if not plate:
+        return ""
+    cm = num(plate.get("cm"))
+    if plate.get("kind") == "bowl":
+        return f" It is in a bowl about {cm:g} cm across." if cm else " It is in a bowl."
+    return f" The plate is about {cm:g} cm across." if cm else " It is on a plate."
 
 
 def photo_item(i: Any) -> dict[str, Any] | None:
@@ -228,12 +305,14 @@ def photo_item(i: Any) -> dict[str, Any] | None:
     if not (0 < grams <= 3000 and 0 < kcal_100 <= 900):
         return None
     per_100, unknown = per_100_of(i)
+    veg_100 = real(i.get("veg_g_100"), 100)
     return {
         "name": name[:80],
         "grams": round(grams),
         "unit": "ml" if str(i.get("unit") or "").strip().lower() == "ml" else "g",
-        "per_100": per_100,
+        "per_100": with_veg(per_100, None if veg_100 is None else round(veg_100, 1)),
         **{k: round(per_100[k] * grams / 100, 1) for k in NUM},
+        **veg_part(None if veg_100 is None else veg_100 * grams / 100),
         **({"unknown": unknown} if unknown else {}),
     }
 
@@ -248,15 +327,17 @@ def items_of(x: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
 
 def with_items(out: dict[str, Any], items: list[dict[str, Any]], complete: bool) -> dict[str, Any]:
     """A photo's answer with its items (two or more). When they are everything the AI saw, the meal is what they add up
-    to (unknown: a macro any item lacks); when some were left out, the meal keeps its own estimate (`items_partial`)."""
+    to (unknown: a macro any item lacks; veg only when every item knows it); when some were left out, the meal keeps its
+    own estimate (`items_partial`)."""
     if len(items) < 2:
         return out
     if not complete:
         return {**out, "items": items, "items_partial": True}
-    out = {k: v for k, v in out.items() if k != "unknown"}
+    out = {k: v for k, v in out.items() if k not in ("unknown", VEG)}
     unknown = [k for k in MACROS if any(k in i.get("unknown", ()) for i in items)]
     sums = {k: round(sum(i[k] for i in items), 1) for k in NUM}
-    return {**out, **sums, **({"unknown": unknown} if unknown else {}), "items": items}
+    veg = sum(i[VEG] for i in items) if all(VEG in i for i in items) else None
+    return {**out, **sums, **veg_part(veg), **({"unknown": unknown} if unknown else {}), "items": items}
 
 
 def real(v: Any, top: float) -> float | None:
@@ -278,11 +359,48 @@ def per_100_result(name: str, x: dict[str, Any]) -> dict[str, Any]:
     unknown = [k for k in MACROS if macros[k] is None]
     return {
         "name": name,
-        "per_100": {"kcal": round(kcal, 1), **{k: round(v or 0.0, 1) for k, v in macros.items()}},
+        "per_100": {"kcal": round(kcal, 1), **{k: round(v or 0.0, 1) for k, v in macros.items()}, **veg_part(veg_100(x))},
         "unit": "ml" if re.match(r"(ml|millilit)", str(x.get("unit") or "").strip().lower()) else "g",
         **({"unknown": unknown} if unknown else {}),
         "source": "estimate",
     }
+
+
+def veg_100(x: dict[str, Any]) -> float | None:
+    """The AI's veg per 100 (veg_g_100) when it can be true: 0 to 100."""
+    return real(x.get("veg_g_100"), 100)
+
+
+def menu_dish(x: Any) -> dict[str, Any] | None:
+    """One dish of a menu: name, description?, the five numbers (a macro the AI didn't give is unknown, 0), veg_g?,
+    grams?; None without a name or real calories."""
+    if not isinstance(x, dict) or not (name := str(x.get("name") or "").strip()):
+        return None
+    if not (kcal := real(x.get("kcal"), 5000)):
+        return None
+    macros = {k: real(x.get(k), 1000) for k in MACROS}
+    unknown = [k for k in MACROS if macros[k] is None]
+    grams = real(x.get("grams"), 5000)
+    return {
+        "name": name[:80],
+        **({"description": d[:200]} if (d := str(x.get("description") or "").strip()) else {}),
+        "kcal": round(kcal, 1),
+        **{k: round(v or 0.0, 1) for k, v in macros.items()},
+        **veg_part(real(x.get(VEG), VEG_MAX)),
+        **({"grams": round(grams)} if grams else {}),
+        **({"unknown": unknown} if unknown else {}),
+    }
+
+
+def menu_result(x: dict[str, Any]) -> dict[str, Any]:
+    """A menu's dishes in its order (at most MAX_DISHES; the unusable ones left out) and the place when it shows it;
+    fails when no dish could be read."""
+    raw = x.get("dishes") if isinstance(x.get("dishes"), list) else []
+    dishes = [d for d in map(menu_dish, raw) if d][:MAX_DISHES]
+    if not dishes:
+        raise ServiceValidationError(NO_MENU)
+    place = str(x.get("place") or "").strip()[:80]
+    return {**({"place": place} if place else {}), "dishes": dishes, "source": "estimate"}
 
 
 def ingredient_line(n: int, i: dict[str, Any]) -> str:
@@ -328,16 +446,20 @@ def ingredient_result(asked: dict[str, Any], x: dict[str, Any], known: dict[str,
             {k: round(num(asked["per_100"].get(k)), 1) for k in NUM},
             unknown_in(asked["per_100"], asked.get("unknown")),
         )
+        veg = veg_of(asked["per_100"])
     elif given((known or x).get("kcal_100")):
         per_100, unknown = per_100_of(known or x)
+        veg = veg_100(known) if known else None
     else:
         return None
+    if veg is None:  # the AI's, for food that doesn't come with it (the person's own, a known product)
+        veg = veg_100(x)
     if (grams := num(asked.get("grams")) or num(x.get("grams"))) <= 0:
         return None
     return {
         "name": str(asked["name"]).strip()[:80],
         "grams": round(grams),
-        "per_100": per_100,
+        "per_100": with_veg(per_100, None if veg is None else round(veg, 1)),
         "cooked_factor": cooked_factor(x.get("cooked_factor")),
         **({"unknown": unknown} if unknown else {}),
     }
@@ -429,7 +551,7 @@ def amount_grams(amount: str, serving: float, pack: float) -> float | None:
 
 def label_result(x: dict[str, Any]) -> dict[str, Any]:
     """The label AI's reading (or a product) times what was eaten; `unknown` lists the macros it doesn't give."""
-    per_100 = {k: round(num(x.get(f"{k}_100")), 2) for k in NUM}
+    per_100 = with_veg({k: round(num(x.get(f"{k}_100")), 2) for k in NUM}, None if (v := veg_100(x)) is None else round(v, 2))
     unknown = [k for k in NUM[1:] if not given(x.get(f"{k}_100"))]
     if not per_100["kcal"]:
         raise HomeAssistantError("I couldn't read the calories on that label. Try a closer, straighter photo.")
@@ -452,6 +574,7 @@ def label_result(x: dict[str, Any]) -> dict[str, Any]:
         "guessed": guessed,
         "note": note,
         **{k: round(per_100[k] * grams / 100, 1) for k in NUM},
+        **veg_part(None if (veg := veg_of(per_100)) is None else veg * grams / 100),
         **({"unknown": unknown} if unknown else {}),
     }
 
@@ -543,11 +666,14 @@ class Estimator:
         await self.hass.async_add_executor_job(write)
         return f"media-source://media_source/local/{PHOTO_DIR}/{name}", mime
 
-    async def photo(self, image: str, hint: str = "") -> dict[str, Any]:
+    async def photo(self, image: str, hint: str = "", plate: dict[str, Any] | None = None) -> dict[str, Any]:
+        """A meal photo; `plate` ({kind: plate or bowl, cm?}) is what it's on, so the AI sizes the portions against it."""
         media = await self.save_photo(image)
         x = await self._ai(
             "estimate a meal from a photo",
-            PHOTO_PROMPT.format(who=self.who, where=self.where, hint=f" They say: {hint}" if hint else ""),
+            PHOTO_PROMPT.format(
+                who=self.who, where=self.where, plate=plate_line(plate), hint=f" They say: {hint}" if hint else ""
+            ),
             PHOTO_STRUCTURE,
             [media],
         )
@@ -562,6 +688,32 @@ class Estimator:
             FIT_STRUCTURE,
         )
         return {**self._meal(x, "text"), **meals_of(x)}
+
+    async def menu(self, images: list[str], hint: str = "") -> dict[str, Any]:
+        """Photos of a menu (1 to MAX_MEDIA), in one AI call: {place?, dishes: [...], source: "estimate"}."""
+        if not images:
+            raise ServiceValidationError("Add a photo of the menu (media).")
+        media = [await self.save_photo(i) for i in images[:MAX_MEDIA]]
+        hint = str(hint or "").strip()[:200]
+        x = await self._ai(
+            "read a menu",
+            MENU_PROMPT.format(who=self.who, where=self.where, most=MAX_DISHES, hint=f" They say: {hint}" if hint else ""),
+            MENU_STRUCTURE,
+            media,
+        )
+        return menu_result(x)
+
+    async def eating_out(self, name: str, hint: str = "") -> dict[str, Any]:
+        """A dish by its name, eaten out (the hint says where: "at <place>"), as one usual portion; nothing is kept."""
+        if not (name := str(name or "").strip()[:80]):
+            raise ServiceValidationError("Add dish_id, or the dish's name.")
+        hint = str(hint or "").strip()[:200]
+        x = await self._ai(
+            "estimate a dish eaten out",
+            EATING_OUT_PROMPT.format(who=self.who, where=self.where, name=name, hint=f" They say: {hint}" if hint else ""),
+            MEAL_STRUCTURE,
+        )
+        return {**self._meal(x, "estimate"), "name": name}
 
     async def per_100(self, name: str, hint: str = "") -> dict[str, Any]:
         """One food by its name, per 100 g (or 100 ml for a drink) as eaten, in one AI call."""
@@ -620,7 +772,8 @@ class Estimator:
         if num(x.get("kcal_100")) and len(code) >= 8:  # the next scan of this barcode needs no photo
             self.products.set(
                 code,
-                {k: x.get(k) for k in ("name", *[f"{n}_100" for n in NUM], "unit", "serving_g", "pack_g")} | {"source": "label"},
+                {k: x.get(k) for k in ("name", *[f"{n}_100" for n in NUM], "veg_g_100", "unit", "serving_g", "pack_g")}
+                | {"source": "label"},
             )
         if not num(x.get("kcal_100")) and len(code) >= 8 and (product := await self._product(code)):
             x = {**product, "eaten_g": x.get("eaten_g")}
@@ -698,12 +851,19 @@ class Estimator:
             if not fresh and (known := self.dishes.get(dish_id)) and num(known.get("kcal")):
                 return self._known_dish(dish_id, name, known)
         else:
-            self.dishes.set(dish_id, {**values_of(out), "source": "ai"})
+            self.dishes.set(dish_id, {**values_of(out), **veg_part(veg_of(out)), "source": "ai"})
         return {**out, "name": name or out["name"], "ref": dish_id, "nutrition_source": "ai"}
 
     @staticmethod
     def _known_dish(dish_id: str, name: str, known: dict[str, Any]) -> dict[str, Any]:
-        return {**values_of(known), "name": name, "source": "dish", "ref": dish_id, "nutrition_source": known.get("source", "ai")}
+        return {
+            **values_of(known),
+            **veg_part(veg_of(known)),
+            "name": name,
+            "source": "dish",
+            "ref": dish_id,
+            "nutrition_source": known.get("source", "ai"),
+        }
 
     async def dish_ai(
         self, name: str, ingredients: list[str] | None, servings: float = 0, amounts_per: str = "recipe"
@@ -747,6 +907,7 @@ class Estimator:
         return {
             "name": str(x.get("name") or "Something").strip()[:80],
             **values_of({k: round(num(x[k]), 1) if given(x.get(k)) else None for k in NUM}),
+            **veg_part(real(x.get(VEG), VEG_MAX)),
             "note": str(x.get("note") or "")[:120],
             "foods": [str(f) for f in x.get("foods") or []][:12],
             "source": source,

@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.11.0 (27 Oct 2026)
+
+- Veg: every `estimate` with numbers gives `veg_g`, the grams of vegetables and pulses (beans, lentils, chickpeas) in it
+  as eaten; potatoes and fruit don't count. For one portion on `photo`, `text`, `dish` and menu dishes; in `per_100` on
+  `per_100`, `label`, `ingredients` and each photo item. A photo with items has what its items add up to. Left out when
+  the AI gives none that can be true. Open Food Facts has no veg; a label photo teaches it to the product book.
+- Entries keep veg: `log_food` takes `veg_g` (one portion) or `veg_g` in `per_100`, `update_food` takes `veg_g` (the
+  person's own, for the whole entry) or `per_100` with it. Portions and grams scale it, copies and recent foods keep
+  it, and `restore_food` puts it back. Food without it doesn't know its veg: never 0, and nothing is worked out for older food.
+  A batch knows it when every ingredient does; a saved meal when every food does.
+- Days (`get_day`, `get_history`, each `get_week_review` day, the calories today sensor) have `veg_g` and `veg_known`,
+  how many entries know it.
+- `get_week_review`: each day has `meals` (calories per meal), and `last_week` has the 7 days before's average veg and
+  fibre a day over the days that know veg (`veg_days`). `days` goes up to 35.
+- `estimate` kind `photo` takes `plate` (`{kind: "plate" or "bowl", cm?}`): "The plate is about 26 cm across" goes in
+  the prompt, so portions are sized against it.
+- `estimate` kind `menu`: 1 to 4 photos of a menu (`media`) become its dishes in order, at most 40, each a typical
+  restaurant portion with its listed sides, and the place's name when it shows. Nothing readable: "Couldn't read a menu
+  in that photo."
+- `estimate` kind `dish` without `dish_id`: a dish eaten out, by its name, with the hint saying where.
+- Fullness: `set_fullness` keeps how full the person was after breakfast, lunch or dinner (`hungry`, `satisfied`,
+  `full`, or `null` to take it back), for today and the 7 days before, with an optional `client_id`; kept 400 days.
+  `get_fullness` reads them back newest first, each with that meal's calories and foods as they are now. `get_day` has
+  the day's answers as `fullness`.
+
 ## 1.10.0 (26 Oct 2026)
 
 - `estimate` kind `per_100` with `name` (and `hint`): one food's numbers per 100 g as it is eaten, or per 100 ml for a

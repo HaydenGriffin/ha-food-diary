@@ -13,6 +13,9 @@ NUM = ("kcal", "protein_g", "carbs_g", "fat_g", "fibre_g")
 # `unknown` lists them, a day's `incomplete` counts them (diary.py).
 MACROS = ("protein_g", "carbs_g", "fat_g", "fibre_g")
 MEALS = ("breakfast", "lunch", "dinner", "snack")
+# Grams of vegetables and pulses (beans, lentils, chickpeas) in what was eaten; potatoes and fruit don't count. Not one of
+# NUM: it is known only where it was given (left out, not 0, when it wasn't), and goals and totals don't have it.
+VEG = "veg_g"
 # Where an entry's numbers came from. "plan" is only ever written by the meal planner; "import" is food brought over from
 # another app (its numbers are what the person logged there); "batch" is a bowl of a cooked batch (its ref the batch id).
 SOURCES = ("photo", "label", "barcode", "text", "dish", "manual", "again", "saved", "voice", "import", "batch", "estimate")

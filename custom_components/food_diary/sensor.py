@@ -1,7 +1,8 @@
 """Today's numbers per person: calories, protein, carbs, fat and fibre eaten (with long-term statistics, so history graphs
 and averages work), calories left against the goal, and when something was last logged. Each carries `api` (see
 const.API_VERSION), so apps can tell what the diary's services support. A macro's sensor has `incomplete` (how many of
-today's entries don't know it) when some don't: its state is then a lower bound."""
+today's entries don't know it) when some don't: its state is then a lower bound. Calories today also has today's veg
+(`veg_g`, from the `veg_known` entries that know it)."""
 
 from __future__ import annotations
 
@@ -146,6 +147,8 @@ class DiarySensor(_DiaryEntity):
                 "left": d["left"].get("kcal"),
                 "logged": len(d["entries"]),
                 **{m: d["meals"][m] for m in MEALS},
+                "veg_g": d["veg_g"],
+                "veg_known": d["veg_known"],
             }
         if key == "calories_left":
             return {"goal": d["goals"].get("kcal")}

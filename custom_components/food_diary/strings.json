@@ -127,6 +127,10 @@
           "name": "Fibre",
           "description": "Grams for one portion."
         },
+        "veg_g": {
+          "name": "Veg",
+          "description": "Grams of vegetables and pulses (beans, lentils, chickpeas) in one portion; potatoes and fruit don't count. Leave out when not known."
+        },
         "portions": {
           "name": "Portions",
           "description": "How many portions."
@@ -244,6 +248,10 @@
         "fibre_g": {
           "name": "Fibre",
           "description": "Your own grams for the whole entry."
+        },
+        "veg_g": {
+          "name": "Veg",
+          "description": "Your own grams of vegetables and pulses for the whole entry."
         },
         "checked": {
           "name": "Checked",
@@ -397,7 +405,7 @@
     },
     "estimate": {
       "name": "Estimate",
-      "description": "Work out what something is and its nutrition, without logging it: a meal photo, a label photo and amount, a barcode and amount, words, a recipe, a batch's raw ingredients, or one food per 100 g.",
+      "description": "Work out what something is and its nutrition, without logging it: a meal photo, a label photo and amount, a barcode and amount, words, a recipe or a dish eaten out, a batch's raw ingredients, one food per 100 g, or a menu.",
       "fields": {
         "person": {
           "name": "Person",
@@ -405,7 +413,7 @@
         },
         "kind": {
           "name": "Kind",
-          "description": "photo, label, barcode, text, dish, ingredients or per_100."
+          "description": "photo, label, barcode, text, dish, ingredients, per_100 or menu."
         },
         "image": {
           "name": "Photo",
@@ -417,7 +425,7 @@
         },
         "hint": {
           "name": "Hint",
-          "description": "Anything to help with a meal photo, or with a food's name (per_100)."
+          "description": "Anything to help with a meal photo, a menu, a food's name (per_100) or a dish eaten out (like at the place's name)."
         },
         "text": {
           "name": "Text",
@@ -429,7 +437,7 @@
         },
         "dish_id": {
           "name": "Recipe id",
-          "description": "The recipe's id (dish). Its answer is kept."
+          "description": "The recipe's id (dish). Its answer is kept. Leave out for a dish eaten out, by its name."
         },
         "dish_name": {
           "name": "Recipe name",
@@ -457,7 +465,15 @@
         },
         "name": {
           "name": "Food",
-          "description": "The food's name (per_100): its numbers per 100 g, or 100 ml for a drink, as eaten."
+          "description": "The food's name (per_100): its numbers per 100 g, or 100 ml for a drink, as eaten. Or a dish eaten out (dish without a recipe id)."
+        },
+        "plate": {
+          "name": "Plate",
+          "description": "What a meal photo's food is on, so portions are sized against it: kind plate or bowl, and cm across (10 to 40)."
+        },
+        "media": {
+          "name": "Menu photos",
+          "description": "One to four base64 photos of a menu (menu)."
         }
       }
     },
@@ -657,7 +673,7 @@
     },
     "get_week_review": {
       "name": "Get a week's look back",
-      "description": "A week ending on a date: days on target (75–105% of the calorie goal), average, protein days, the most eaten food, recipes tried for the first time, the day closest to the goal.",
+      "description": "A week ending on a date: days on target (75–105% of the calorie goal), average, protein days, the most eaten food, recipes tried for the first time, the day closest to the goal, each day's calories per meal, fibre and veg, and the week before's veg and fibre.",
       "fields": {
         "person": {
           "name": "Person",
@@ -669,7 +685,47 @@
         },
         "days": {
           "name": "Days",
-          "description": "How many days back (7 for a week)."
+          "description": "How many days back (7 for a week; up to 35)."
+        }
+      }
+    },
+    "set_fullness": {
+      "name": "Set fullness",
+      "description": "How full you were a couple of hours after breakfast, lunch or dinner: hungry again, satisfied or still full. For today and the 7 days before.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "date": {
+          "name": "Date",
+          "description": "The meal's day. Leave out for today."
+        },
+        "meal": {
+          "name": "Meal",
+          "description": "breakfast, lunch or dinner."
+        },
+        "fullness": {
+          "name": "Fullness",
+          "description": "hungry, satisfied or full; empty (null) takes the answer back."
+        },
+        "client_id": {
+          "name": "Client id",
+          "description": "An id made for this one answer, so a retry sets it once."
+        }
+      }
+    },
+    "get_fullness": {
+      "name": "Get fullness",
+      "description": "The fullness answers of the last days, newest first, each with what that meal had in the diary.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Whose diary. Leave out for your own (or the only one)."
+        },
+        "days": {
+          "name": "Days",
+          "description": "Today and the days before, this many days in all. Default 60."
         }
       }
     },

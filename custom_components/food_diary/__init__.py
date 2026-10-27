@@ -33,6 +33,7 @@ from .const import (
 )
 from .diary import Book, Diary
 from .estimate import Estimator
+from .fullness import Fullness
 from .notifications import notify_removed
 from .photos import Photos, PhotoView
 from .planner import Planner
@@ -90,6 +91,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FoodDiaryConfigEntry) ->
     diary = Diary(hass, person_key(person))
     await diary.async_load()
     Batches(diary).prune()
+    Fullness(diary).prune()
     books = hass.data[DOMAIN]
     options = entry.options
     source = async_resolve(hass, dict(options))
