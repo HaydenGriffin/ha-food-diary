@@ -359,3 +359,30 @@ async def test_veg_for_a_completed_recipe_needs_no_estimate_again(hass: HomeAssi
     assert asked >= 1 and "veg_g" not in await dinner(hass, day(1))
     await planner(hass, setup, week, [{**dish, "nutrition": {**dish["nutrition"], "veg_g": 200}}]).async_sync()
     assert (await dinner(hass, day(1)))["veg_g"] == 200 and len(ai_calls) == asked
+
+
+async def test_a_completed_recipe_takes_the_completions_veg_through_later_syncs(
+    hass: HomeAssistant, setup, ai_calls, monkeypatch
+):
+    from .test_planner import day, dinner, planner
+
+    monkeypatch.setitem(AI_ANSWERS, "estimate a dish by name", {**AI_ANSWERS["estimate a dish by name"], "veg_g": 150})
+    week = [{"date": day(1), "dinner": "Stew"}]
+    dish = {"id": "r7", "name": "Stew", "nutrition": {"kcal": 600, "protein_g": 20}}  # partial, no veg: completed once
+    await planner(hass, setup, week, [dish]).async_sync()
+    asked = len(ai_calls)
+    assert hass.data[DOMAIN]["dishes"].get("r7")["veg_g"] == 150 and (await dinner(hass, day(1)))["veg_g"] == 150
+    await planner(hass, setup, week, [dish]).async_sync()  # the library still has no veg: the estimate's stays
+    assert hass.data[DOMAIN]["dishes"].get("r7")["veg_g"] == 150 and (await dinner(hass, day(1)))["veg_g"] == 150
+    assert len(ai_calls) == asked
+
+
+async def test_a_completed_recipe_keeps_its_own_veg_even_0(hass: HomeAssistant, setup, ai_calls, monkeypatch):
+    from .test_planner import day, dinner, planner
+
+    monkeypatch.setitem(AI_ANSWERS, "estimate a dish by name", {**AI_ANSWERS["estimate a dish by name"], "veg_g": 150})
+    week = [{"date": day(1), "dinner": "Steak"}]
+    await planner(
+        hass, setup, week, [{"id": "r8", "name": "Steak", "nutrition": {"kcal": 600, "protein_g": 20, "veg_g": 0}}]
+    ).async_sync()
+    assert hass.data[DOMAIN]["dishes"].get("r8")["veg_g"] == 0 and (await dinner(hass, day(1)))["veg_g"] == 0

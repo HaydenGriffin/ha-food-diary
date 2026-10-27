@@ -423,8 +423,8 @@ class Planner:
                 continue
             same_veg = veg_of(known) == veg_of(given)
             if known.get("completed") and nums(known.get("from")) == values:
-                if not same_veg:  # only its veg is new: the completed numbers stay (no estimate again)
-                    self.book.patch(dish["id"], {VEG: veg_of(given)})
+                if not same_veg and veg_of(given) is not None:  # only its veg is new: the completed numbers stay
+                    self.book.patch(dish["id"], {VEG: veg_of(given)})  # (left out, the completion's veg stays)
                 continue
             if (
                 known.get("source") == "recipe"
@@ -456,7 +456,7 @@ class Planner:
         return self.book.set(
             key,
             {
-                **with_veg(values or values_of(known), veg_of(known)),
+                **with_veg(values or values_of(known), veg if (veg := veg_of(known)) is not None else veg_of(est)),
                 "source": known.get("source"),
                 "completed": "estimate" if values else "none",
                 "from": nums(known),

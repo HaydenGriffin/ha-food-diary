@@ -162,8 +162,9 @@ in it as eaten. Potatoes and fruit don't count. Veg is not one of the five numbe
   0 (an explicit `0` is known). Nothing is worked out for food logged before 1.11.0, and numbers set with
   `set_dish_nutrition` don't have it.
 - **Planned meals** take `veg_g` from wherever their numbers come from when it is there: the plan slot's `nutrition`, the
-  dish library's `nutrition` (kept in the recipe book), or an estimate the planner makes anyway. A change of only the veg
-  follows into the planned entry. Nothing is asked for veg alone, so a meal whose numbers have none doesn't know it.
+  dish library's `nutrition` (kept in the recipe book), or an estimate the planner makes anyway (completing partial
+  numbers too: the recipe's own veg, even 0, wins over the estimate's, and a library that leaves veg out later doesn't
+  take it away). A change of only the veg follows into the planned entry. Nothing is asked for veg alone, so a meal whose numbers have none doesn't know it.
 - **Entries** keep it like the other numbers: `veg_g` in `per_portion` (and in `per_100` when by weight) and for what was
   eaten. Portions and grams scale it; copies, `get_recent` foods, Undo (`restore_food`, `restore_snapshot`, `undo_copy`)
   keep it.
