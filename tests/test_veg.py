@@ -284,3 +284,78 @@ async def test_a_dish_by_plan_without_veg_stays_unknown(hass: HomeAssistant, set
     hass.data[DOMAIN]["dishes"].set("soup", {**SOUP, "source": "own"})
     out = await call(hass, "estimate", {"kind": "dish", "dish_id": "soup", "dish_name": "Soup"})
     assert "veg_g" not in out
+
+
+# ---------- a new amount with veg of her own (review fix) ----------
+
+
+async def test_a_new_weight_with_own_veg_keeps_the_numbers_for_that_weight(hass: HomeAssistant, setup):
+    e = await logged(hass, name="Peas", grams=100, per_100={"kcal": 80, "protein_g": 5})
+    e = (await call(hass, "update_food", {"entry_id": e["id"], "grams": 200, "veg_g": 180}))["entry"]
+    assert (e["kcal"], e["protein_g"], e["veg_g"], e["grams"]) == (160, 10, 180, 200)
+    assert (e["per_portion"]["kcal"], e["per_portion"]["veg_g"]) == (160, 180)
+
+
+async def test_new_portions_with_own_veg_keep_the_numbers_for_those_portions(hass: HomeAssistant, setup):
+    e = await logged(hass, name="Beans", **BEANS)
+    e = (await call(hass, "update_food", {"entry_id": e["id"], "portions": 2, "veg_g": 100}))["entry"]
+    assert (e["kcal"], e["protein_g"], e["veg_g"], e["per_portion"]["veg_g"]) == (160, 10, 100, 50)
+    e = (await call(hass, "update_food", {"entry_id": e["id"], "portions": 4, "kcal": 300}))["entry"]
+    assert (e["kcal"], e["protein_g"], e["veg_g"]) == (300, 20, 200)  # left out: scaled with the portions
+
+
+# ---------- the meal plan carries veg (review fix) ----------
+
+
+async def test_a_planned_meal_takes_veg_from_the_plans_numbers(hass: HomeAssistant, setup, ai_calls):
+    from .test_planner import day, entries, planner
+
+    with_veg = {"name": "Dal", "nutrition": {**{k: v for k, v in SOUP.items() if k != "name"}, "veg_g": 150}}
+    without = {"name": "Soup", "nutrition": {k: v for k, v in SOUP.items() if k != "name"}}
+    await planner(hass, setup, [{"date": day(1), "dinner": with_veg, "lunch": without}]).async_sync()
+    names = await entries(hass, day(1))
+    assert names["Dal"]["veg_g"] == 150 and names["Dal"]["per_portion"]["veg_g"] == 150
+    assert "veg_g" not in names["Soup"]  # unknown stays unknown
+    assert ai_calls == []
+
+
+async def test_a_planned_recipe_takes_the_librarys_veg_and_follows_it(hass: HomeAssistant, setup, ai_calls):
+    from .test_planner import day, dinner, planner
+
+    numbers = {k: v for k, v in SOUP.items() if k != "name"}
+    week = [{"date": day(1), "dinner": "Lentil soup"}]
+    dish = {"id": "r5", "name": "Lentil soup", "nutrition": {**numbers, "veg_g": 120}}
+    p = planner(hass, setup, week, [dish])
+    await p.async_sync()
+    assert (await dinner(hass, day(1)))["veg_g"] == 120 and hass.data[DOMAIN]["dishes"].get("r5")["veg_g"] == 120
+    p = planner(hass, setup, week, [{**dish, "nutrition": {**numbers, "veg_g": 90}}])  # only the veg changed
+    await p.async_sync()
+    assert (await dinner(hass, day(1)))["veg_g"] == 90
+    p = planner(hass, setup, week, [{**dish, "nutrition": numbers}])  # no veg any more: unknown again
+    await p.async_sync()
+    assert "veg_g" not in await dinner(hass, day(1))
+    assert ai_calls == []
+
+
+async def test_a_planned_meal_by_name_keeps_the_estimates_veg(hass: HomeAssistant, setup, ai_calls, monkeypatch):
+    from .test_planner import day, dinner, planner
+
+    monkeypatch.setitem(AI_ANSWERS, "estimate a meal from words", {**AI_ANSWERS["estimate a meal from words"], "veg_g": 70})
+    p = planner(hass, setup, [{"date": day(1), "dinner": "Vegetable stir fry"}])
+    await p.async_sync()
+    assert (await dinner(hass, day(1)))["veg_g"] == 70
+    assert hass.data[DOMAIN]["dishes"].get("name:vegetable stir fry")["veg_g"] == 70
+    await p.async_sync()
+    assert len(ai_calls) == 1  # kept: not asked again
+
+
+async def test_veg_for_a_completed_recipe_needs_no_estimate_again(hass: HomeAssistant, setup, ai_calls):
+    from .test_planner import day, dinner, planner
+
+    week = [{"date": day(1), "dinner": "Stew"}]
+    dish = {"id": "r6", "name": "Stew", "nutrition": {"kcal": 600, "protein_g": 20}}  # partial: completed once
+    await planner(hass, setup, week, [dish]).async_sync()
+    asked = len(ai_calls)
+    assert asked >= 1 and "veg_g" not in await dinner(hass, day(1))
+    await planner(hass, setup, week, [{**dish, "nutrition": {**dish["nutrition"], "veg_g": 200}}]).async_sync()
+    assert (await dinner(hass, day(1)))["veg_g"] == 200 and len(ai_calls) == asked

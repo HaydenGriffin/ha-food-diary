@@ -161,3 +161,14 @@ def test_prune_keeps_the_last_400_days():
     diary = FakeDiary()
     Fullness(diary).prune()  # type: ignore[arg-type]
     assert diary.data["fullness"] == {day(-KEEP_DAYS): {"lunch": "full"}} and diary.changed == 1
+
+
+async def test_a_repeat_after_midnight_answers_for_the_day_it_was_given(hass: HomeAssistant, setup, freezer):
+    freezer.move_to(dt_util.start_of_local_day() + timedelta(hours=23, minutes=50))
+    first = await answer(hass, "lunch", "full", client_id="answer-0003")  # no date: today
+    given_on = first["date"]
+    freezer.move_to(dt_util.start_of_local_day() + timedelta(days=1, minutes=10))
+    assert day(0) != given_on
+    late = await answer(hass, "lunch", "full", client_id="answer-0003")
+    assert late == {"date": given_on, "meal": "lunch", "fullness": "full", "duplicate": True}
+    assert (await call(hass, "get_day"))["fullness"] == {}  # nothing set on the new day

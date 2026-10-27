@@ -9,7 +9,10 @@
 - Entries keep veg: `log_food` takes `veg_g` (one portion) or `veg_g` in `per_100`, `update_food` takes `veg_g` (the
   person's own, for the whole entry) or `per_100` with it. Portions and grams scale it, copies and recent foods keep
   it, and `restore_food` puts it back. Food without it doesn't know its veg: never 0, and nothing is worked out for older food.
-  A batch knows it when every ingredient does; a saved meal when every food does.
+  A batch knows it when every ingredient does; a saved meal when every food does. Planned meals take it from the plan's
+  or the library's numbers, or an estimate made anyway; nothing is asked for veg alone.
+- `update_food` with a new `portions` or `grams` and own numbers (or `veg_g`) scales the entry to the new amount first;
+  only the numbers sent replace what that comes to.
 - Days (`get_day`, `get_history`, each `get_week_review` day, the calories today sensor) have `veg_g` and `veg_known`,
   how many entries know it.
 - `get_week_review`: each day has `meals` (calories per meal), and `last_week` has the 7 days before's average veg and

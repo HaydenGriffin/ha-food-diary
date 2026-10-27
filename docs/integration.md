@@ -159,8 +159,11 @@ Since 1.11.0, food can say how much veg it has: `veg_g`, the grams of vegetables
 in it as eaten. Potatoes and fruit don't count. Veg is not one of the five numbers: it has no goal and isn't in `totals`.
 
 - **Unknown unless given.** An entry, estimate or saved meal without `veg_g` doesn't know its veg; that is never read as
-  0 (an explicit `0` is known). Nothing is worked out for food logged before 1.11.0, and food from a recipe's numbers
-  (the planner, `set_dish_nutrition`, a recipe's new numbers) doesn't know it.
+  0 (an explicit `0` is known). Nothing is worked out for food logged before 1.11.0, and numbers set with
+  `set_dish_nutrition` don't have it.
+- **Planned meals** take `veg_g` from wherever their numbers come from when it is there: the plan slot's `nutrition`, the
+  dish library's `nutrition` (kept in the recipe book), or an estimate the planner makes anyway. A change of only the veg
+  follows into the planned entry. Nothing is asked for veg alone, so a meal whose numbers have none doesn't know it.
 - **Entries** keep it like the other numbers: `veg_g` in `per_portion` (and in `per_100` when by weight) and for what was
   eaten. Portions and grams scale it; copies, `get_recent` foods, Undo (`restore_food`, `restore_snapshot`, `undo_copy`)
   keep it.
@@ -274,7 +277,7 @@ follow a new `grams` ("This entry's own numbers aren't for a weight…"): switch
 its numbers.
 | `meal` | meal | |
 | `name` | string | |
-| `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | Your own numbers for the **whole** entry. Sets `edited`. The entry's veg stays as it was. |
+| `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fibre_g` | number | Your own numbers for the **whole** entry. Sets `edited`. The entry's veg stays as it was. Sent with a new `portions` or `grams`, they are for the new amount: the numbers (and veg) not sent are the entry's scaled to that amount first (1.11.0). |
 | `veg_g` | number | Your own grams of [veg](#veg) for the **whole** entry, like the five numbers (sets `edited`; 1.11.0). |
 | `checked` | boolean | `true` marks the entry as confirmed right. `false` clears it. |
 | `unknown` | list | Macros (`protein_g`, `carbs_g`, `fat_g`, `fibre_g`) that aren't known after all: stored as `0` and listed in the entry's [`unknown`](#unknown-numbers). Wins over a number sent for the same macro. Sets `edited`. Since 1.6.1. |

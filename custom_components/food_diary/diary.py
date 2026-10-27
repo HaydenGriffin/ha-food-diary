@@ -173,6 +173,11 @@ def values_of(src: dict[str, Any] | None) -> dict[str, Any]:
     return {**nums(src), **({"unknown": u} if u else {})}
 
 
+def values_with_veg(src: dict[str, Any] | None) -> dict[str, Any]:
+    """values_of with the veg too, when `src` knows it."""
+    return with_veg(values_of(src), veg_of(src))
+
+
 def calories_only(e: dict[str, Any]) -> bool:
     """Calories, and no protein, carbs or fat at all: how an entry from before `unknown` looks when it only had calories."""
     return num(e.get("kcal")) > 0 and not any(num(e.get(k)) for k in ("protein_g", "carbs_g", "fat_g"))
@@ -683,6 +688,7 @@ class Diary:
                 self._regram(e, num(f["grams"]))
             if num(f.get("portions")):
                 e["portions"] = num(f["portions"])
+            self._recount(e)  # the numbers for the new amount: own numbers below replace only the ones given
             said = [k for k in MACROS if k in (f.get("unknown") or ())]  # put back to unknown (Undo after a fix): 0
             if any(k in f for k in (*NUM, VEG)) or said:  # the person's own numbers for the whole entry
                 p = num(e.get("portions")) or 1.0
@@ -803,7 +809,7 @@ class Diary:
         e = self.find(d, entry_id)
         if e is None or e.get("per_100") or (expected_rev is not None and (rev(e) != expected_rev or e.get("edited"))):
             return None  # numbers per portion don't fit an entry by weight (per_100 × grams)
-        e.update(per_portion=nums(values), ref=ref, note=note, unknown=unknown_in(values))
+        e.update(per_portion=with_veg(nums(values), veg_of(values)), ref=ref, note=note, unknown=unknown_in(values))
         self._recount(e)
         self._changed_entry(e)
         self.async_changed()

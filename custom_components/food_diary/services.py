@@ -576,7 +576,8 @@ def async_register_services(hass: HomeAssistant) -> None:
             Fullness(diary).set(d, meal, call.data["fullness"])
             return {"fullness": {"date": d, "meal": meal}}
 
-        _, repeat = await diary.create_once(call.data.get("client_id"), dict(call.data), create)
+        record, repeat = await diary.create_once(call.data.get("client_id"), dict(call.data), create)
+        d, meal = record["fullness"]["date"], record["fullness"]["meal"]  # a repeat: the day and meal it was for
         return {"date": d, "meal": meal, "fullness": Fullness(diary).get(d, meal), **repeat_flags(repeat, False)}
 
     async def get_fullness(call: ServiceCall) -> ServiceResponse:
