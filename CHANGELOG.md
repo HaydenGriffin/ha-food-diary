@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.11.1 (30 Oct 2026)
+
+- Meal photos, menus and a batch's ingredients work again. Their AI requests had a description on a field inside a list
+  (a photo's items, a menu's dishes, the ingredients), and ai_task turns down the whole request for that, so every one
+  failed with a bare 400. Meal photos and menus broke in 1.11.0 and ingredients in 1.9.1. The prompts already say what
+  each of those fields is. The tests' fake AI now checks every request's structure the way ai_task does.
+- If ai_task does turn a request down, it's logged and the call fails with "The AI didn't answer", not a bare 400.
+
 ## 1.11.0 (27 Oct 2026)
 
 - Veg: every `estimate` with numbers gives `veg_g`, the grams of vegetables and pulses (beans, lentils, chickpeas) in it

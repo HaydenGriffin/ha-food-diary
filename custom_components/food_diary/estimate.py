@@ -36,6 +36,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+import voluptuous as vol
 
 from .batches import cooked_factor
 from .const import MACROS, MAX_IMAGE_BYTES, MEALS, NUM, OFF_FIELDS, OFF_URL, OFF_USER_AGENT, PHOTO_DAYS, PHOTO_DIR, VEG
@@ -53,6 +54,9 @@ NUMBER = {"number": {"min": 0, "max": 10000, "step": 0.1, "mode": "box"}}
 VEG_WORDS = "vegetables and pulses (beans, lentils, chickpeas; potatoes and fruit don't count)"
 VEG_FIELD = {"description": f"Grams of {VEG_WORDS} in ONE portion as eaten; 0 if none", "required": True, "selector": NUMBER}
 VEG_100_FIELD = {"description": f"Grams of {VEG_WORDS} per 100 g (or 100 ml); 0 if none", "required": True, "selector": NUMBER}
+# a field inside an object selector (a photo's items, a batch's ingredients, a menu's dishes) takes no description: ai_task
+# refuses the whole request if one has it, so the prompt says what each of those fields is
+NUMBER_FIELD = {"required": True, "selector": NUMBER}
 VEG_ASK = (
     " Also give veg_g: the grams of vegetables and pulses (beans, lentils, chickpeas) in it as eaten; potatoes and fruit "
     "don't count; 0 when there are none."
@@ -123,10 +127,10 @@ LABEL_STRUCTURE = {
 # a photo also lists each separate thing on the plate with about what it weighs, so an app can show and correct each one
 ITEM_FIELDS = {
     "name": {"required": True, "selector": {"text": {}}},
-    "grams": {"required": True, "selector": NUMBER},
+    "grams": NUMBER_FIELD,
     "unit": {"required": True, "selector": {"text": {}}},
-    **{f"{k}_100": {"required": True, "selector": NUMBER} for k in LABELS},
-    "veg_g_100": VEG_100_FIELD,
+    **{f"{k}_100": NUMBER_FIELD for k in LABELS},
+    "veg_g_100": NUMBER_FIELD,
 }
 PHOTO_STRUCTURE = {
     **FIT_STRUCTURE,
@@ -137,15 +141,11 @@ PHOTO_STRUCTURE = {
 }
 # a batch's raw ingredients, one item each in the order asked, with how much cooking changes each one's weight
 INGREDIENT_FIELDS = {
-    "n": {
-        "description": "The ingredient's number in the list",
-        "required": True,
-        "selector": {"number": {"min": 1, "max": 50, "step": 1, "mode": "box"}},
-    },
+    "n": {"required": True, "selector": {"number": {"min": 1, "max": 50, "step": 1, "mode": "box"}}},
     "name": {"required": True, "selector": {"text": {}}},
-    "grams": {"required": True, "selector": NUMBER},
-    **{f"{k}_100": {"required": True, "selector": NUMBER} for k in LABELS},
-    "veg_g_100": VEG_100_FIELD,
+    "grams": NUMBER_FIELD,
+    **{f"{k}_100": NUMBER_FIELD for k in LABELS},
+    "veg_g_100": NUMBER_FIELD,
     "cooked_factor": {"required": True, "selector": {"number": {"min": 0.2, "max": 4, "step": 0.05, "mode": "box"}}},
 }
 INGREDIENTS_STRUCTURE = {
@@ -173,11 +173,11 @@ PER_100_STRUCTURE = {
 }
 # a menu: each dish on it, in its order, as a typical restaurant portion
 MENU_DISH_FIELDS = {
-    "name": {"description": "The dish as the menu names it", "required": True, "selector": {"text": {}}},
-    "description": {"description": "What the menu says it is or comes with, short", "selector": {"text": {}}},
-    **{k: {"description": f"{v} for one portion as served", "required": True, "selector": NUMBER} for k, v in LABELS.items()},
-    "veg_g": VEG_FIELD,
-    "grams": {"description": "About what one portion weighs as served, in g (or ml for a drink)", "selector": NUMBER},
+    "name": {"required": True, "selector": {"text": {}}},
+    "description": {"selector": {"text": {}}},
+    **{k: NUMBER_FIELD for k in LABELS},
+    "veg_g": NUMBER_FIELD,
+    "grams": {"selector": NUMBER},
 }
 MENU_STRUCTURE = {
     "place": {"description": "The restaurant's or café's name, if the menu shows it; empty if not", "selector": {"text": {}}},
@@ -200,8 +200,8 @@ PHOTO_PROMPT = (
     "one item each, with name (short English, sentence case), grams (about what that item weighs as served; for a drink, "
     'ml), unit ("g", or "ml" for a drink) and its calories, protein, carbohydrates, fat and fibre per 100 g (or 100 ml) as '
     "it is cooked and served (kcal_100, protein_g_100, carbs_g_100, fat_g_100, fibre_g_100), and veg_g_100: the grams of "
-    "vegetables and pulses per 100 g of it. One dish that is eaten as one thing (a bowl of soup, a sandwich, a pizza slice) "
-    "is one item. The items should add up to the meal's numbers." + VEG_ASK + "{plate}{hint}"
+    "vegetables and pulses per 100 g (or 100 ml) of it, 0 when it has none. One dish that is eaten as one thing (a bowl "
+    "of soup, a sandwich, a pizza slice) is one item. The items should add up to the meal's numbers." + VEG_ASK + "{plate}{hint}"
 )
 LABEL_PROMPT = (
     "This is a photo of the nutrition label on a food or drink pack. Read the values PER 100 g (or per 100 ml): calories (kcal, "
@@ -641,6 +641,9 @@ class Estimator:
         try:
             res = await self.hass.services.async_call("ai_task", "generate_data", data, blocking=True, return_response=True)
         except HomeAssistantError as err:
+            raise HomeAssistantError(f"The AI didn't answer: {err}") from err
+        except vol.Invalid as err:  # ai_task refused the request itself: a bug here, never the person's input
+            _LOGGER.error("ai_task refused the request to %s: %s", task, err)
             raise HomeAssistantError(f"The AI didn't answer: {err}") from err
         return (res or {}).get("data") or {}
 

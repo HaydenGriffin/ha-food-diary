@@ -1,5 +1,5 @@
-"""Fixtures: two people, a fake AI (answers by task name; or held until the test lets it answer), a notify service that
-records, Open Food Facts mocked."""
+"""Fixtures: two people, a fake AI (answers by task name; or held until the test lets it answer; either refuses a
+structure ai_task would), a notify service that records, Open Food Facts mocked."""
 
 from __future__ import annotations
 
@@ -11,9 +11,11 @@ from unittest.mock import patch
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers import selector
 from homeassistant.setup import async_setup_component
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 from custom_components.food_diary.const import CONF_NOTIFY, CONF_OPEN_PATH, CONF_PERSON, CONF_WEBHOOK_ID, DOMAIN
 
@@ -61,6 +63,17 @@ AI_ANSWERS: dict[str, dict[str, Any]] = {
     "work out an amount": {"eaten_g": 60},
 }
 JPEG = b"\xff\xd8\xff\xe0" + b"0" * 2000
+# ai_task.generate_data's check of `structure` (its STRUCTURE_FIELD_SCHEMA; the module can't be imported here): a field
+# it doesn't take, here or in an object selector's fields, refuses the whole request
+AI_STRUCTURE = vol.Schema(
+    {
+        str: {
+            vol.Optional("description"): str,
+            vol.Optional("required"): bool,
+            vol.Required("selector"): selector.validate_selector,
+        }
+    }
+)
 
 
 @pytest.fixture(autouse=True)
@@ -74,6 +87,7 @@ def ai_calls() -> Generator[list[dict[str, Any]]]:
     calls: list[dict[str, Any]] = []
 
     async def fake_ai(self, task, instructions, structure, attachments=None):
+        AI_STRUCTURE(structure)
         calls.append({"task": task, "instructions": instructions, "structure": structure, "attachments": attachments})
         return dict(AI_ANSWERS[task])
 
@@ -87,6 +101,7 @@ def held_ai(ai_calls):
     held = SimpleNamespace(gate=asyncio.Event(), asked=asyncio.Event(), answers=dict(AI_ANSWERS))
 
     async def slow_ai(self, task, instructions, structure, attachments=None):
+        AI_STRUCTURE(structure)
         ai_calls.append({"task": task, "instructions": instructions, "structure": structure, "attachments": attachments})
         held.asked.set()
         await held.gate.wait()
