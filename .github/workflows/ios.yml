@@ -51,3 +51,4 @@ jobs:
             /tmp/food-shots
             ios/build/UITests.xcresult
           if-no-files-found: ignore
+          retention-days: 14
